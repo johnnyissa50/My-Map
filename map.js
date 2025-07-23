@@ -1,35 +1,60 @@
 // Initialize map
 var map = L.map('map').setView([0, 0], 2);
 
-// Add OpenStreetMap tiles
+// Add base map
 L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
     maxZoom: 21
 }).addTo(map);
 
-// Initialize marker cluster group (disable clustering at zoom 17+)
+// Initialize marker cluster group
 var markers = L.markerClusterGroup({
     disableClusteringAtZoom: 17
 });
 
-// Load and parse CSV file
+var markerList = []; // Store individual markers for search
+
+// Load and parse CSV
 Papa.parse('data.csv', {
     download: true,
     header: true,
     complete: function(results) {
         results.data.forEach(function(point) {
-            if (point.Latitude && point.Longitude) {
-                var marker = L.marker([parseFloat(point.Latitude), parseFloat(point.Longitude)])
-                    .bindPopup('<strong>' + point.Name + '</strong>');
-                marker.feature = { properties: { name: point.Name } }; // for potential search extension
+            if (point.Latitude && point.Longitude && point.Name) {
+                var lat = parseFloat(point.Latitude);
+                var lng = parseFloat(point.Longitude);
+                var name = point.Name;
+
+                var marker = L.marker([lat, lng])
+                    .bindPopup('<strong>' + name + '</strong>');
+
+                marker.options.title = name; // Needed for Leaflet Search
+                markerList.push(marker);
                 markers.addLayer(marker);
             }
         });
+
         map.addLayer(markers);
         map.fitBounds(markers.getBounds());
+
+        // Add local search control (by name)
+        var searchControl = new L.Control.Search({
+            layer: L.layerGroup(markerList),
+            propertyName: 'title',
+            marker: false,
+            moveToLocation: function(latlng, title, map) {
+                map.setView(latlng, 18);
+            }
+        });
+
+        searchControl.on('search:locationfound', function(e) {
+            e.layer.openPopup();
+        });
+
+        map.addControl(searchControl);
     }
 });
 
-// Add search control (geocoder)
+// Optional: Add global geocoder (e.g., places, cities)
 L.Control.geocoder({
     defaultMarkGeocode: false
 })
@@ -38,7 +63,7 @@ L.Control.geocoder({
 })
 .addTo(map);
 
-// Add Locate Me (GPS) button
+// Add Locate button
 L.control.locate({
     position: 'topleft',
     strings: {
