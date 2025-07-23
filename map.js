@@ -1,56 +1,47 @@
 // Initialize map
 var map = L.map('map').setView([0, 0], 2);
 
-// Add base map
+// Add base layer
 L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
     maxZoom: 21
 }).addTo(map);
 
-// Cluster group and search markers list
-var markers = L.markerClusterGroup({ disableClusteringAtZoom: 17 });
-var markerList = [];
+// Create cluster and searchable layers
+var clusterGroup = L.markerClusterGroup({ disableClusteringAtZoom: 17 });
+var searchLayer = L.layerGroup(); // Used ONLY for search
 
+// Load CSV
 Papa.parse('data.csv', {
     download: true,
     header: true,
+    skipEmptyLines: true,
     complete: function(results) {
-        results.data.forEach(function(point) {
-            if (point.Latitude && point.Longitude && point.Name) {
-                var lat = parseFloat(point.Latitude);
-                var lng = parseFloat(point.Longitude);
-                var name = point.Name;
+        results.data.forEach(function(row) {
+            if (row.Latitude && row.Longitude && row.Name) {
+                var lat = parseFloat(row.Latitude);
+                var lng = parseFloat(row.Longitude);
+                var name = row.Name.trim(); // 🔍 Remove extra spaces
 
-                var marker = L.marker([lat, lng]);
-                marker.bindPopup('<strong>' + name + '</strong>');
-                marker.options.title = name; // Required for search
+                // Create marker
+                var marker = L.marker([lat, lng], { title: name }) // title used for search
+                    .bindPopup('<strong>' + name + '</strong>');
 
-                markers.addLayer(marker);
-                markerList.push(marker);
+                clusterGroup.addLayer(marker);
+                searchLayer.addLayer(marker); // 🔍 Add to search layer
             }
         });
 
-        map.addLayer(markers);
-        map.fitBounds(markers.getBounds());
+        map.addLayer(clusterGroup);
+        map.fitBounds(clusterGroup.getBounds());
 
-        // ✅ Local Search with Suggestions (case-sensitive)
+        // Add Search Control
         var searchControl = new L.Control.Search({
-            layer: L.layerGroup(markerList),
-            propertyName: 'title',
-            textPlaceholder: 'Search by name...',
-            textSearch: true, // 🔍 Enables suggestions
+            layer: searchLayer,
+            propertyName: 'title',   // 🔍 Looks in marker.options.title
             marker: false,
+            textPlaceholder: 'Search by name...',
             moveToLocation: function(latlng, title, map) {
                 map.setView(latlng, 18);
-            },
-            // ✅ Custom filter: case-sensitive search
-            filterData: function(text, records) {
-                var results = {};
-                for (var key in records) {
-                    if (key.includes(text)) {
-                        results[key] = records[key];
-                    }
-                }
-                return results;
             }
         });
 
@@ -62,16 +53,14 @@ Papa.parse('data.csv', {
     }
 });
 
-// Optional: Global geocoder
+// Optional: Geocoder for cities/places
 L.Control.geocoder({
     defaultMarkGeocode: false
-})
-.on('markgeocode', function(e) {
+}).on('markgeocode', function(e) {
     map.setView(e.geocode.center, 10);
-})
-.addTo(map);
+}).addTo(map);
 
-// Locate me button
+// Add "Locate Me" GPS button
 L.control.locate({
     position: 'topleft',
     strings: {
