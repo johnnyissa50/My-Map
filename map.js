@@ -6,11 +6,11 @@ L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
   maxZoom: 21
 }).addTo(map);
 
-// Create marker cluster and search layer
+// Marker clusters and search layer
 var clusterGroup = L.markerClusterGroup({ disableClusteringAtZoom: 17 });
-var searchLayer = L.layerGroup(); // Used for search
+var searchLayer = L.layerGroup(); // for search control
 
-// Load CSV with PapaParse
+// Load CSV and populate markers
 Papa.parse('data.csv', {
   download: true,
   header: true,
@@ -24,7 +24,7 @@ Papa.parse('data.csv', {
 
         if (!isNaN(lat) && !isNaN(lng)) {
           var marker = L.marker([lat, lng], {
-            title: name // Required for leaflet-search
+            title: name // REQUIRED for search to work
           }).bindPopup('<strong>' + name + '</strong>');
 
           clusterGroup.addLayer(marker);
@@ -39,7 +39,7 @@ Papa.parse('data.csv', {
       map.fitBounds(clusterGroup.getBounds());
     }
 
-    // ✅ Add search control after markers are ready
+    // ✅ Add search control AFTER markers are loaded
     var searchControl = new L.Control.Search({
       layer: searchLayer,
       propertyName: 'title',
@@ -58,11 +58,11 @@ Papa.parse('data.csv', {
   }
 });
 
-// Add Locate Me button
+// Add "Locate Me" button
 L.control.locate({
   position: 'topleft',
   strings: {
-    title: "Show my location"
+    title: "Show me where I am"
   },
   flyTo: true
 }).addTo(map);
