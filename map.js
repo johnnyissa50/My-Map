@@ -1,47 +1,54 @@
-// Initialize map
+// Initialize the map
 var map = L.map('map').setView([0, 0], 2);
 
-// Add base layer
+// Add OpenStreetMap tiles
 L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
     maxZoom: 21
 }).addTo(map);
 
-// Create cluster and searchable layers
+// Create a marker cluster group for clustering markers
 var clusterGroup = L.markerClusterGroup({ disableClusteringAtZoom: 17 });
-var searchLayer = L.layerGroup(); // Used ONLY for search
 
-// Load CSV
+// Create a layer group for search (separate from cluster)
+var searchLayer = L.layerGroup();
+
+// Load and parse CSV data
 Papa.parse('data.csv', {
     download: true,
     header: true,
     skipEmptyLines: true,
     complete: function(results) {
         results.data.forEach(function(row) {
-            if (row.Latitude && row.Longitude && row.Name) {
+            if (row.Name && row.Latitude && row.Longitude) {
+                var name = row.Name.trim();
                 var lat = parseFloat(row.Latitude);
                 var lng = parseFloat(row.Longitude);
-                var name = row.Name.trim(); // 🔍 Remove extra spaces
 
-                // Create marker
-                var marker = L.marker([lat, lng], { title: name }) // title used for search
+                // Create marker with 'title' property for search
+                var marker = L.marker([lat, lng], { title: name })
                     .bindPopup('<strong>' + name + '</strong>');
 
                 clusterGroup.addLayer(marker);
-                searchLayer.addLayer(marker); // 🔍 Add to search layer
+                searchLayer.addLayer(marker);
             }
         });
 
+        // Add cluster group to map
         map.addLayer(clusterGroup);
-        map.fitBounds(clusterGroup.getBounds());
 
-        // Add Search Control
+        // Fit map bounds to markers
+        if (clusterGroup.getLayers().length > 0) {
+            map.fitBounds(clusterGroup.getBounds());
+        }
+
+        // Add Leaflet Search control
         var searchControl = new L.Control.Search({
             layer: searchLayer,
-            propertyName: 'title',   // 🔍 Looks in marker.options.title
+            propertyName: 'title',
             marker: false,
-            textPlaceholder: 'Search by name...',
+            textPlaceholder: 'Search points by name...',
             moveToLocation: function(latlng, title, map) {
-                map.setView(latlng, 18);
+                map.setView(latlng, 18); // zoom when found
             }
         });
 
@@ -53,14 +60,7 @@ Papa.parse('data.csv', {
     }
 });
 
-// Optional: Geocoder for cities/places
-L.Control.geocoder({
-    defaultMarkGeocode: false
-}).on('markgeocode', function(e) {
-    map.setView(e.geocode.center, 10);
-}).addTo(map);
-
-// Add "Locate Me" GPS button
+// Add Locate Me control button
 L.control.locate({
     position: 'topleft',
     strings: {
