@@ -5,7 +5,6 @@
   <title>Custom GIS Points Map</title>
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
 
-  <!-- Leaflet core + plugins CSS -->
   <link rel="stylesheet" href="https://unpkg.com/leaflet/dist/leaflet.css" />
   <link rel="stylesheet" href="https://unpkg.com/leaflet.markercluster/dist/MarkerCluster.css" />
   <link rel="stylesheet" href="https://unpkg.com/leaflet.markercluster/dist/MarkerCluster.Default.css" />
@@ -14,17 +13,12 @@
 
   <style>
     #map { height: 100vh; }
-    .leaflet-control-search {
-      max-width: 300px !important;
-      z-index: 10000 !important;
-    }
   </style>
 </head>
 <body>
 
 <div id="map"></div>
 
-<!-- Scripts -->
 <script src="https://unpkg.com/leaflet/dist/leaflet.js"></script>
 <script src="https://unpkg.com/leaflet.markercluster/dist/leaflet.markercluster.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/PapaParse/5.3.2/papaparse.min.js"></script>
