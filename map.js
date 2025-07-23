@@ -1,4 +1,3 @@
-
 // Initialize map
 var map = L.map('map').setView([0, 0], 2);
 
@@ -7,8 +6,10 @@ L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
     maxZoom: 18
 }).addTo(map);
 
-// Initialize marker cluster group
-var markers = L.markerClusterGroup();
+// Initialize marker cluster group with clustering disabled at zoom 15+
+var markers = L.markerClusterGroup({
+    disableClusteringAtZoom: 15
+});
 
 // Function to load and parse CSV
 Papa.parse('data.csv', {
