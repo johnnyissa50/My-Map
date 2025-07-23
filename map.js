@@ -3,12 +3,12 @@ var map = L.map('map').setView([0, 0], 2);
 
 // Add OpenStreetMap tiles
 L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
-    maxZoom: 18
+    maxZoom: 21
 }).addTo(map);
 
 // Initialize marker cluster group with clustering disabled at zoom 15+
 var markers = L.markerClusterGroup({
-    disableClusteringAtZoom: 15
+    disableClusteringAtZoom: 17
 });
 
 // Function to load and parse CSV
