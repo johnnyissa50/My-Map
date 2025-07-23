@@ -1,19 +1,15 @@
 // Initialize map
 var map = L.map('map').setView([0, 0], 2);
 
-// Add base map
+// Add tiles
 L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
     maxZoom: 21
 }).addTo(map);
 
-// Initialize marker cluster group
-var markers = L.markerClusterGroup({
-    disableClusteringAtZoom: 17
-});
+// Cluster group and search layer
+var markers = L.markerClusterGroup({ disableClusteringAtZoom: 17 });
+var markerList = []; // Used only for search (non-clustered layer)
 
-var markerList = []; // Store individual markers for search
-
-// Load and parse CSV
 Papa.parse('data.csv', {
     download: true,
     header: true,
@@ -24,22 +20,23 @@ Papa.parse('data.csv', {
                 var lng = parseFloat(point.Longitude);
                 var name = point.Name;
 
-                var marker = L.marker([lat, lng])
-                    .bindPopup('<strong>' + name + '</strong>');
+                // Create marker
+                var marker = L.marker([lat, lng]);
+                marker.bindPopup('<strong>' + name + '</strong>');
+                marker.options.title = name; // Required for search
 
-                marker.options.title = name; // Needed for Leaflet Search
-                markerList.push(marker);
                 markers.addLayer(marker);
+                markerList.push(marker);
             }
         });
 
         map.addLayer(markers);
         map.fitBounds(markers.getBounds());
 
-        // Add local search control (by name)
+        // ✅ SEARCH FIXED HERE
         var searchControl = new L.Control.Search({
-            layer: L.layerGroup(markerList),
-            propertyName: 'title',
+            layer: L.layerGroup(markerList), // Search separate layer
+            propertyName: 'title',           // Matches marker.options.title
             marker: false,
             moveToLocation: function(latlng, title, map) {
                 map.setView(latlng, 18);
@@ -54,22 +51,18 @@ Papa.parse('data.csv', {
     }
 });
 
-// Optional: Add global geocoder (e.g., places, cities)
+// Optional geocoder for places
 L.Control.geocoder({
     defaultMarkGeocode: false
-})
-.on('markgeocode', function(e) {
+}).on('markgeocode', function(e) {
     map.setView(e.geocode.center, 10);
-})
-.addTo(map);
+}).addTo(map);
 
-// Add Locate button
+// Locate me button
 L.control.locate({
     position: 'topleft',
     strings: {
         title: "Show my location"
     },
-    flyTo: true,
-    keepCurrentZoomLevel: false,
-    showPopup: false
+    flyTo: true
 }).addTo(map);
