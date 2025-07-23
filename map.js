@@ -1,16 +1,15 @@
-// Initialize the map
 var map = L.map('map').setView([0, 0], 2);
 
-// Add OpenStreetMap tiles
+// Base tile
 L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
   maxZoom: 21
 }).addTo(map);
 
 // Marker clusters and search layer
 var clusterGroup = L.markerClusterGroup({ disableClusteringAtZoom: 17 });
-var searchLayer = L.layerGroup(); // for search control
+var searchLayer = L.layerGroup();
 
-// Load CSV and populate markers
+// Load CSV
 Papa.parse('data.csv', {
   download: true,
   header: true,
@@ -23,9 +22,8 @@ Papa.parse('data.csv', {
         var lng = parseFloat(row.Longitude);
 
         if (!isNaN(lat) && !isNaN(lng)) {
-          var marker = L.marker([lat, lng], {
-            title: name // REQUIRED for search to work
-          }).bindPopup('<strong>' + name + '</strong>');
+          var marker = L.marker([lat, lng], { title: name })
+            .bindPopup('<strong>' + name + '</strong>');
 
           clusterGroup.addLayer(marker);
           searchLayer.addLayer(marker);
@@ -34,18 +32,18 @@ Papa.parse('data.csv', {
     });
 
     map.addLayer(clusterGroup);
+    map.addLayer(searchLayer);
 
     if (clusterGroup.getLayers().length > 0) {
       map.fitBounds(clusterGroup.getBounds());
     }
 
-    // ✅ Add search control AFTER markers are loaded
+    // Add search control
     var searchControl = new L.Control.Search({
       layer: searchLayer,
       propertyName: 'title',
       marker: false,
-      textPlaceholder: 'Search by name...',
-      moveToLocation: function(latlng, title, map) {
+      moveToLocation: function(latlng) {
         map.setView(latlng, 18);
       }
     });
@@ -58,11 +56,11 @@ Papa.parse('data.csv', {
   }
 });
 
-// Add "Locate Me" button
+// Add GPS locate button
 L.control.locate({
   position: 'topleft',
   strings: {
-    title: "Show me where I am"
+    title: "Show my location"
   },
   flyTo: true
 }).addTo(map);
