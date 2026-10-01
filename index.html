@@ -790,15 +790,24 @@ function parseFatFree(text) {
 // Forward of parseFatFree: render the free characters typed so far as the
 // full "PREFIX-R0X-FDTXX-FATXX" skeleton, stopping as soon as a segment
 // isn't fully typed yet (so it never invents digits the person hasn't
-// entered).
+// entered) - OR as soon as what's been typed can no longer match any real
+// FAT code in the data, in which case auto-inserting the next "-FDT"/"-FAT"
+// would be pointless (e.g. nothing starts with "7FF", or nothing starts
+// with "722-R01-FDT99"): the text is left exactly as typed instead.
 function buildFatSkeleton(free) {
   const out = [];
   let i = 0;
-  for (const seg of FAT_SEGMENTS) {
+  for (let s = 0; s < FAT_SEGMENTS.length; s++) {
+    const seg = FAT_SEGMENTS[s];
     const slice = free.slice(i, i + seg.len);
     i += slice.length;
     out.push(seg.literal + slice);
     if (slice.length < seg.len) break;
+
+    if (s < FAT_SEGMENTS.length - 1) {
+      const soFar = out.join('-');
+      if (!allPoints.some(p => p.search.startsWith(soFar))) break;
+    }
   }
   return out.join('-');
 }
