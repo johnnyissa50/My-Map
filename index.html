@@ -65,10 +65,21 @@
   #topbar h1 { font-size:15px; margin:0; white-space:nowrap; font-weight:600;}
   #searchBox { flex:1; position:relative; }
   #searchInput {
-    width:100%; box-sizing:border-box; padding:10px 12px; border-radius:8px; border:none;
+    width:100%; box-sizing:border-box; padding:10px 34px 10px 12px; border-radius:8px; border:none;
     font-size:15px; outline:none;
   }
   #searchInput::placeholder { color:#999; }
+  /* Circle-with-X "clear" button, right inside the search box, shown only
+     once there is something typed to clear. */
+  #clearSearchBtn {
+    position:absolute; top:50%; right:6px; transform:translateY(-50%);
+    width:26px; height:26px; border:none; background:transparent; padding:0;
+    cursor:pointer; display:none; align-items:center; justify-content:center;
+  }
+  #clearSearchBtn.visible { display:flex; }
+  #clearSearchBtn svg { width:20px; height:20px; }
+  #clearSearchBtn:active svg circle { stroke:#333; }
+  #clearSearchBtn:active svg line { stroke:#333; }
   #suggestions {
     position:absolute; top:44px; left:0; right:0; background:#fff; border-radius:8px;
     max-height:140px; overflow-y:auto; box-shadow:0 4px 14px rgba(0,0,0,.3); display:none; z-index:1001;
@@ -176,6 +187,9 @@
 <div id="topbar">
   <div id="searchBox">
     <input id="searchInput" type="text" placeholder="722-R01-FDT01-FAT01" autocomplete="off" autocapitalize="characters" autocorrect="off" spellcheck="false" />
+    <button id="clearSearchBtn" title="Clear" aria-label="Clear">
+      <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9" fill="none" stroke="#666" stroke-width="3"/><line x1="8.5" y1="8.5" x2="15.5" y2="15.5" stroke="#666" stroke-width="2.5" stroke-linecap="round"/><line x1="15.5" y1="8.5" x2="8.5" y2="15.5" stroke="#666" stroke-width="2.5" stroke-linecap="round"/></svg>
+    </button>
     <div id="suggestions"></div>
   </div>
   <div id="layerWrap">
@@ -647,6 +661,18 @@ map.on('moveend', () => {
 
 const input = document.getElementById('searchInput');
 const suggBox = document.getElementById('suggestions');
+const clearSearchBtn = document.getElementById('clearSearchBtn');
+
+function updateClearSearchBtn() {
+  clearSearchBtn.classList.toggle('visible', input.value.length > 0);
+}
+
+clearSearchBtn.addEventListener('click', () => {
+  input.value = '';
+  suggBox.style.display = 'none';
+  updateClearSearchBtn();
+  input.focus();
+});
 
 function renderSuggestions(matches) {
   if (matches.length === 0) {
@@ -747,12 +773,12 @@ function tryDMSSearch(q) {
 // and Delete are left completely alone (plain, default, one character at a
 // time), so removing text never triggers any extra insertion or jumping.
 const FAT_SEGMENTS = [
-  { literal: '', len: 3 },    // prefix, e.g. "108" / "MLT"
-  { literal: 'R0', len: 1 },  // -> "R01"
-  { literal: 'FDT', len: 2 }, // -> "FDT11"
-  { literal: 'FAT', len: 2 }  // -> "FAT99"
+  { literal: '', len: 3 },     // prefix, e.g. "108" / "MLT"
+  { literal: 'R0', len: 1 },   // -> "R01"
+  { literal: 'FDT0', len: 1 }, // -> "FDT01" (leading 0 is auto-filled too)
+  { literal: 'FAT', len: 2 }   // -> "FAT99"
 ];
-const FAT_FREE_LEN = FAT_SEGMENTS.reduce((n, s) => n + s.len, 0); // 8
+const FAT_FREE_LEN = FAT_SEGMENTS.reduce((n, s) => n + s.len, 0); // 7
 
 // True only while the text is unambiguously FAT-code-shaped - i.e. it has
 // none of the characters that only a coordinate search uses. Decimal/DMS
@@ -819,6 +845,7 @@ function autoFormatFat(text) {
 
 function handleSearchInput(e) {
   let q = sanitizeSearchInput();
+  updateClearSearchBtn();
 
   if (tryDMSSearch(q)) return;
   if (tryDecimalSearch(q)) return;
@@ -879,6 +906,7 @@ function goToPoint(name) {
   if (!p) return;
   suggBox.style.display = 'none';
   input.value = name;
+  updateClearSearchBtn();
 
   // setView puts the target at the map's center (50%). To make the FAT land
   // at 30% instead, aim the map center below the FAT by the 20% difference.
