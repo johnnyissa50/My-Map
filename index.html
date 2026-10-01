@@ -795,7 +795,6 @@ function buildFatSkeleton(free) {
   const out = [];
   let i = 0;
   for (const seg of FAT_SEGMENTS) {
-    if (i >= free.length && seg.literal) break;
     const slice = free.slice(i, i + seg.len);
     i += slice.length;
     out.push(seg.literal + slice);
