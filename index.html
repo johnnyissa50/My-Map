@@ -69,17 +69,20 @@
     font-size:15px; outline:none;
   }
   #searchInput::placeholder { color:#999; }
-  /* Circle-with-X "clear" button, right inside the search box, shown only
-     once there is something typed to clear. */
-  #clearSearchBtn {
+  /* Circle-with-X "clear" button and the "paste" button share the same spot
+     at the right edge of the search box - never both visible at once:
+     clear shows once there's text to clear, paste shows while the box is
+     empty (so there's always a one-tap way to get a FAT code in). */
+  #clearSearchBtn, #pasteSearchBtn {
     position:absolute; top:50%; right:6px; transform:translateY(-50%);
     width:26px; height:26px; border:none; background:transparent; padding:0;
     cursor:pointer; display:none; align-items:center; justify-content:center;
   }
-  #clearSearchBtn.visible { display:flex; }
-  #clearSearchBtn svg { width:20px; height:20px; }
+  #clearSearchBtn.visible, #pasteSearchBtn.visible { display:flex; }
+  #clearSearchBtn svg, #pasteSearchBtn svg { width:20px; height:20px; }
   #clearSearchBtn:active svg circle { stroke:#333; }
   #clearSearchBtn:active svg line { stroke:#333; }
+  #pasteSearchBtn:active svg * { stroke:#333; }
   #suggestions {
     position:absolute; top:44px; left:0; right:0; background:#fff; border-radius:8px;
     max-height:140px; overflow-y:auto; box-shadow:0 4px 14px rgba(0,0,0,.3); display:none; z-index:1001;
@@ -189,6 +192,12 @@
     <input id="searchInput" type="text" placeholder="722-R01-FDT01-FAT01" autocomplete="off" autocapitalize="characters" autocorrect="off" spellcheck="false" />
     <button id="clearSearchBtn" title="Clear" aria-label="Clear">
       <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9" fill="none" stroke="#666" stroke-width="3"/><line x1="8.5" y1="8.5" x2="15.5" y2="15.5" stroke="#666" stroke-width="2.5" stroke-linecap="round"/><line x1="15.5" y1="8.5" x2="8.5" y2="15.5" stroke="#666" stroke-width="2.5" stroke-linecap="round"/></svg>
+    </button>
+    <button id="pasteSearchBtn" title="Paste" aria-label="Paste">
+      <svg viewBox="0 0 24 24" fill="none" stroke="#666" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+        <rect x="6" y="4" width="12" height="17" rx="2"/>
+        <rect x="9" y="2.3" width="6" height="3.4" rx="1"/>
+      </svg>
     </button>
     <div id="suggestions"></div>
   </div>
@@ -662,9 +671,15 @@ map.on('moveend', () => {
 const input = document.getElementById('searchInput');
 const suggBox = document.getElementById('suggestions');
 const clearSearchBtn = document.getElementById('clearSearchBtn');
+const pasteSearchBtn = document.getElementById('pasteSearchBtn');
 
+// Exactly one of the two is ever visible: clear while there's text to clear,
+// paste while the box is empty - so there's always a one-tap way either to
+// wipe the box or to get a FAT code into it.
 function updateClearSearchBtn() {
-  clearSearchBtn.classList.toggle('visible', input.value.length > 0);
+  const hasText = input.value.length > 0;
+  clearSearchBtn.classList.toggle('visible', hasText);
+  pasteSearchBtn.classList.toggle('visible', !hasText);
 }
 
 clearSearchBtn.addEventListener('click', () => {
@@ -672,6 +687,25 @@ clearSearchBtn.addEventListener('click', () => {
   suggBox.style.display = 'none';
   updateClearSearchBtn();
   input.focus();
+});
+
+pasteSearchBtn.addEventListener('click', async () => {
+  try {
+    const text = await navigator.clipboard.readText();
+    if (!text) { input.focus(); return; }
+    input.value = text;
+    // Runs the pasted text through the exact same sanitize/auto-format/
+    // auto-jump pipeline as a normal keyboard paste (handleSearchInput reads
+    // the current value itself, so no event object is needed here).
+    handleSearchInput();
+    input.focus();
+    input.setSelectionRange(input.value.length, input.value.length);
+  } catch (err) {
+    // navigator.clipboard.readText() needs HTTPS and clipboard-read
+    // permission; if it's blocked or unsupported, fall back to focusing the
+    // field so the user can paste manually (long-press > Paste, or Ctrl/Cmd+V).
+    input.focus();
+  }
 });
 
 function renderSuggestions(matches) {
@@ -702,19 +736,26 @@ function renderSuggestions(matches) {
 // and N/E need to be uppercase anyway). The caret position is preserved so
 // editing in the middle of the text doesn't jump to the end.
 //
-// A space is kept ONLY when it sits directly between two digits - that's
-// the one place a space is meaningful: the separator between the two
-// numbers of a Decimal Degrees pair (e.g. "36.868 42.945"). Every other
-// space - leading, trailing, doubled, next to a letter/dash/comma/symbol -
-// is removed, same as before these coordinate formats were added.
+// A space is only ever meaningful once, as the separator between the two
+// numbers of a Decimal Degrees pair (e.g. "36.868 42.945"). So a space
+// survives ONLY when the rest of the text (ignoring spaces) is digits and
+// "." only - no letters at all - AND has at least one digit AND at least
+// one "." . In every other case (no digit yet, no "." yet, or any letter
+// present, e.g. while typing a FAT code or DMS) every space is stripped.
+// Even when allowed, at most one space total is kept - typing a second one
+// is simply ignored rather than inserting it.
 const SEARCH_CODE_LENGTH = 19;
 
 function cleanSearchText(s) {
   let out = s.toUpperCase().replace(/[^A-Z0-9\-.,°'"\s]/g, '');
-  out = out.replace(/\s+/g, ' ');
-  out = out.replace(/(\d) (\d)/g, '$1\u0001$2');
-  out = out.replace(/ /g, '');
-  out = out.replace(/\u0001/g, ' ');
+  const nonSpace = out.replace(/\s/g, '');
+  const spaceAllowed = !/[A-Z]/.test(nonSpace) && /\d/.test(nonSpace) && /\./.test(nonSpace);
+  if (!spaceAllowed) {
+    out = out.replace(/\s/g, '');
+  } else {
+    let seen = false;
+    out = out.replace(/\s/g, () => (seen ? '' : (seen = true, ' ')));
+  }
   return out;
 }
 
