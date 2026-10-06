@@ -369,10 +369,21 @@ const LONG_PRESS_MS = 1000;
 // clusters, and would be fragile. A plain distance loop over all points is
 // trivial even for a few thousand points since it only runs once per press.
 const LONG_PRESS_POINT_THRESHOLD_PX = 25;
-const LONG_PRESS_MOVE_TOLERANCE_PX = 10; // finger drift beyond this cancels the hold
+const LONG_PRESS_MOVE_TOLERANCE_PX = 18; // finger drift beyond this cancels the hold (loose enough to absorb normal touchscreen jitter)
 
 let longPressTimer = null;
 let longPressStartPx = null;
+let coordPopup = null;          // the currently-open long-press popup, if any
+let suppressNextMapClick = false; // true only for the one click caused by releasing the press that opened it
+
+// A click elsewhere (a genuinely new click, not the release that opened the
+// popup) closes it - closeOnClick is turned off on the popup itself (below)
+// specifically so that very first click doesn't close it; this handler
+// takes over closing it for every click after that.
+map.on('click', () => {
+  if (suppressNextMapClick) { suppressNextMapClick = false; return; }
+  if (coordPopup) { map.closePopup(coordPopup); }
+});
 
 function isNearAnyPoint(containerPoint, thresholdPx) {
   for (let i = 0; i < allPoints.length; i++) {
@@ -396,15 +407,19 @@ map.on('mousedown', (e) => {
   const latlng = e.latlng;
   longPressTimer = setTimeout(() => {
     longPressTimer = null;
-    // closeOnClick:false - releasing the finger/mouse after a motionless
-    // hold is itself seen by Leaflet as a "click" on the map, and every
-    // popup closes on the very next map click by default. Without this
-    // option the popup we just opened would close itself the instant the
-    // press that opened it was released.
-    L.popup({ closeOnClick: false })
+    // Releasing the finger/mouse after a motionless hold is itself seen by
+    // Leaflet as a "click" on the map, and every popup closes on the very
+    // next map click by default (closeOnClick). closeOnClick:false turns
+    // that off for THIS popup, and suppressNextMapClick skips exactly that
+    // one release-click in our own handler above - so the popup survives
+    // being opened, but a later, separate click elsewhere still closes it
+    // normally through that handler.
+    suppressNextMapClick = true;
+    coordPopup = L.popup({ closeOnClick: false })
       .setLatLng(latlng)
       .setContent(coordPopupContent(latlng.lat, latlng.lng))
       .openOn(map);
+    coordPopup.on('remove', () => { coordPopup = null; });
   }, LONG_PRESS_MS);
 });
 
@@ -414,7 +429,13 @@ map.on('mousemove', (e) => {
   }
 });
 map.on('mouseup', cancelLongPress);
-map.on('dragstart', cancelLongPress);
+// Deliberately NOT listening to Leaflet's own 'dragstart': it fires once
+// movement passes just 3px (the map's default clickTolerance), which a
+// touchscreen crosses from ordinary finger tremor alone even when the
+// person isn't trying to move at all - cancelling almost every hold before
+// it could complete. LONG_PRESS_MOVE_TOLERANCE_PX above (our own mousemove
+// check) is the only movement cancellation now, and is forgiving enough for
+// that natural jitter while still catching a real, deliberate drag quickly.
 map.on('zoomstart', cancelLongPress);
 
 
