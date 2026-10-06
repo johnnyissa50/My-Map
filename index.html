@@ -412,19 +412,18 @@ function cancelLongPress() {
   longPressStartPx = null;
 }
 
-map.on('mousedown', (e) => {
+function startLongPress(containerPoint, latlng) {
   cancelLongPress();
   if (measuring) return; // don't fight the measuring tool's own tap handling
-  if (isNearAnyPoint(e.containerPoint, LONG_PRESS_POINT_THRESHOLD_PX)) return; // let the point's own popup handle this press
-  longPressStartPx = e.containerPoint;
-  const latlng = e.latlng;
+  if (isNearAnyPoint(containerPoint, LONG_PRESS_POINT_THRESHOLD_PX)) return; // let the point's own popup handle this press
+  longPressStartPx = containerPoint;
   longPressTimer = setTimeout(() => {
     longPressTimer = null;
     // Releasing the finger/mouse after a motionless hold is itself seen by
     // Leaflet as a "click" on the map, and every popup closes on the very
     // next map click by default (closeOnClick). closeOnClick:false turns
     // that off for THIS popup, and suppressNextMapClick skips exactly that
-    // one release-click in our own handler above - so the popup survives
+    // one release-click in our own handler below - so the popup survives
     // being opened, but a later, separate click elsewhere still closes it
     // normally through that handler.
     suppressNextMapClick = true;
@@ -434,8 +433,13 @@ map.on('mousedown', (e) => {
       .openOn(map);
     coordPopup.on('remove', () => { coordPopup = null; });
   }, LONG_PRESS_MS);
-});
+}
 
+// Real mouse (desktop/laptop): Leaflet's 'mousedown'/'mousemove'/'mouseup'
+// map events are a direct passthrough of the native DOM events, which fire
+// exactly when the mouse button goes down and stay accurate for as long as
+// it's held - this path already works correctly.
+map.on('mousedown', (e) => startLongPress(e.containerPoint, e.latlng));
 map.on('mousemove', (e) => {
   if (longPressTimer && longPressStartPx && e.containerPoint.distanceTo(longPressStartPx) > LONG_PRESS_MOVE_TOLERANCE_PX) {
     cancelLongPress();
@@ -450,6 +454,42 @@ map.on('mouseup', cancelLongPress);
 // check) is the only movement cancellation now, and is forgiving enough for
 // that natural jitter while still catching a real, deliberate drag quickly.
 map.on('zoomstart', cancelLongPress);
+
+// Touch (iPhone/iPad and most Android browsers): a real native 'mousedown'
+// DOM event is NOT reliably fired the moment a finger touches down - at
+// best, some browsers synthesize one only once the finger lifts (as part of
+// the touchend -> mousedown/mouseup/click compatibility sequence browsers
+// fire for tap support), which happens all at once, after the hold is
+// already over, leaving no time for the 1s timer to ever complete. That's
+// why this worked on a laptop but never on an iPhone: 'mousedown' above
+// simply never arrived while the finger was actually down. Leaflet's
+// higher-level 'click' event (used for measuring/markers elsewhere in this
+// file) is unaffected by this and already fires correctly on tap - it's
+// only this literal "is the mouse/finger currently down" signal that's
+// unreliable on touch, so it's rebuilt here from the raw touchstart/
+// touchmove/touchend events directly (same technique already used for the
+// double-tap-zoom gesture further below), independent of whether a
+// synthetic mousedown ever shows up.
+(function enableTouchLongPress() {
+  const container = map.getContainer();
+  function pointFromTouch(touch) {
+    const rect = container.getBoundingClientRect();
+    return L.point(touch.clientX - rect.left, touch.clientY - rect.top);
+  }
+  container.addEventListener('touchstart', (e) => {
+    if (e.touches.length !== 1) { cancelLongPress(); return; } // a 2nd finger means pinch-zoom, not a hold
+    const pt = pointFromTouch(e.touches[0]);
+    startLongPress(pt, map.containerPointToLatLng(pt));
+  }, { passive: true });
+  container.addEventListener('touchmove', (e) => {
+    if (!longPressTimer || !longPressStartPx) return;
+    if (e.touches.length !== 1 || pointFromTouch(e.touches[0]).distanceTo(longPressStartPx) > LONG_PRESS_MOVE_TOLERANCE_PX) {
+      cancelLongPress();
+    }
+  }, { passive: true });
+  container.addEventListener('touchend', cancelLongPress, { passive: true });
+  container.addEventListener('touchcancel', cancelLongPress, { passive: true });
+})();
 
 
 // Tapping a FAT point while measuring should only add a path point, not pop
