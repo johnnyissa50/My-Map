@@ -69,20 +69,17 @@
     font-size:15px; outline:none;
   }
   #searchInput::placeholder { color:#999; }
-  /* Circle-with-X "clear" button and the "paste" button share the same spot
-     at the right edge of the search box - never both visible at once:
-     clear shows once there's text to clear, paste shows while the box is
-     empty (so there's always a one-tap way to get a FAT code in). */
-  #clearSearchBtn, #pasteSearchBtn {
+  /* Circle-with-X "clear" button, right inside the search box, shown only
+     once there is something typed to clear. */
+  #clearSearchBtn {
     position:absolute; top:50%; right:6px; transform:translateY(-50%);
     width:26px; height:26px; border:none; background:transparent; padding:0;
     cursor:pointer; display:none; align-items:center; justify-content:center;
   }
-  #clearSearchBtn.visible, #pasteSearchBtn.visible { display:flex; }
-  #clearSearchBtn svg, #pasteSearchBtn svg { width:20px; height:20px; }
+  #clearSearchBtn.visible { display:flex; }
+  #clearSearchBtn svg { width:20px; height:20px; }
   #clearSearchBtn:active svg circle { stroke:#333; }
   #clearSearchBtn:active svg line { stroke:#333; }
-  #pasteSearchBtn:active svg * { stroke:#333; }
   #suggestions {
     position:absolute; top:44px; left:0; right:0; background:#fff; border-radius:8px;
     max-height:140px; overflow-y:auto; box-shadow:0 4px 14px rgba(0,0,0,.3); display:none; z-index:1001;
@@ -192,12 +189,6 @@
     <input id="searchInput" type="text" placeholder="722-R01-FDT01-FAT01" autocomplete="off" autocapitalize="characters" autocorrect="off" spellcheck="false" />
     <button id="clearSearchBtn" title="Clear" aria-label="Clear">
       <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9" fill="none" stroke="#666" stroke-width="3"/><line x1="8.5" y1="8.5" x2="15.5" y2="15.5" stroke="#666" stroke-width="2.5" stroke-linecap="round"/><line x1="15.5" y1="8.5" x2="8.5" y2="15.5" stroke="#666" stroke-width="2.5" stroke-linecap="round"/></svg>
-    </button>
-    <button id="pasteSearchBtn" title="Paste" aria-label="Paste">
-      <svg viewBox="0 0 24 24" fill="none" stroke="#666" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
-        <rect x="6" y="4" width="12" height="17" rx="2"/>
-        <rect x="9" y="2.3" width="6" height="3.4" rx="1"/>
-      </svg>
     </button>
     <div id="suggestions"></div>
   </div>
@@ -365,6 +356,62 @@ function addMeasurePoint(e) {
 
 map.on('click', addMeasurePoint);
 
+// ---- Long-press on empty map: show the pressed location's coordinates ----
+// Leaflet normalizes both mouse and single-finger touch into the same
+// 'mousedown'/'mousemove'/'mouseup' events, so one set of handlers covers
+// desktop and mobile alike (consistent with every other handler in this
+// file - no separate touch-specific code needed).
+const LONG_PRESS_MS = 1000;
+// "Not on a FAT point" is checked geometrically (pixel distance to every
+// point's on-screen position) rather than by relying on event-propagation
+// order between the canvas/marker layers and the map - that would differ
+// between the dense-zoom canvas dots, the clustered markers and plain
+// clusters, and would be fragile. A plain distance loop over all points is
+// trivial even for a few thousand points since it only runs once per press.
+const LONG_PRESS_POINT_THRESHOLD_PX = 25;
+const LONG_PRESS_MOVE_TOLERANCE_PX = 10; // finger drift beyond this cancels the hold
+
+let longPressTimer = null;
+let longPressStartPx = null;
+
+function isNearAnyPoint(containerPoint, thresholdPx) {
+  for (let i = 0; i < allPoints.length; i++) {
+    const p = allPoints[i];
+    const px = map.latLngToContainerPoint([p.lat, p.lng]);
+    if (containerPoint.distanceTo(px) <= thresholdPx) return true;
+  }
+  return false;
+}
+
+function cancelLongPress() {
+  if (longPressTimer) { clearTimeout(longPressTimer); longPressTimer = null; }
+  longPressStartPx = null;
+}
+
+map.on('mousedown', (e) => {
+  cancelLongPress();
+  if (measuring) return; // don't fight the measuring tool's own tap handling
+  if (isNearAnyPoint(e.containerPoint, LONG_PRESS_POINT_THRESHOLD_PX)) return; // let the point's own popup handle this press
+  longPressStartPx = e.containerPoint;
+  const latlng = e.latlng;
+  longPressTimer = setTimeout(() => {
+    longPressTimer = null;
+    L.popup()
+      .setLatLng(latlng)
+      .setContent(coordPopupContent(latlng.lat, latlng.lng))
+      .openOn(map);
+  }, LONG_PRESS_MS);
+});
+
+map.on('mousemove', (e) => {
+  if (longPressTimer && longPressStartPx && e.containerPoint.distanceTo(longPressStartPx) > LONG_PRESS_MOVE_TOLERANCE_PX) {
+    cancelLongPress();
+  }
+});
+map.on('mouseup', cancelLongPress);
+map.on('dragstart', cancelLongPress);
+map.on('zoomstart', cancelLongPress);
+
 
 // Tapping a FAT point while measuring should only add a path point, not pop
 // up its info box over the path. (Popups opened by search have no source
@@ -462,10 +509,23 @@ function getPointIcon(color) {
 }
 
 function popupContent(p) {
-  return '<b>' + p.n + '</b> &nbsp;<a href="#" class="copy-fat">Copy</a><br>' +
+  return '<b>' + p.n + '</b> &nbsp;<a href="#" class="copy-text" data-copy="' + p.n + '" data-label="Copy">Copy</a><br>' +
     'Partner : ' + p.pt + '<br>' +
     'Installed ONTs : ' + p.ont + '<br>' +
     '<a href="https://www.google.com/maps?q=' + p.lat + ',' + p.lng + '" target="_blank">Open in Google Maps</a>';
+}
+
+// Decimal-degree coordinates, 6 decimal places (~11cm precision - plenty for
+// this use, and short enough to read/copy comfortably).
+function formatDecimalCoords(lat, lng) {
+  return lat.toFixed(6) + ', ' + lng.toFixed(6);
+}
+
+function coordPopupContent(lat, lng) {
+  const coords = formatDecimalCoords(lat, lng);
+  return '<b>' + coords + '</b><br>' +
+    '<a href="#" class="copy-text" data-copy="' + coords + '" data-label="Copy Location Coordinates">Copy Location Coordinates</a><br>' +
+    '<a href="https://www.google.com/maps?q=' + lat + ',' + lng + '" target="_blank">Open in Google Maps</a>';
 }
 
 function copyText(text) {
@@ -488,19 +548,23 @@ function copyText(text) {
 
 // Leaflet stops click propagation at the popup container, so a document-level
 // listener wouldn't see the click. Attach directly when each popup opens.
+// Generic: works for the FAT-code "Copy" link and the long-press
+// "Copy Location Coordinates" link alike - each just carries its own text
+// to copy and its own label to restore afterward.
 map.on('popupopen', (e) => {
   const el = e.popup.getElement();
   if (!el) return;
-  const link = el.querySelector('.copy-fat');
+  const link = el.querySelector('.copy-text');
   if (!link) return;
   link.addEventListener('click', (ev) => {
     ev.preventDefault();
-    const code = el.querySelector('.leaflet-popup-content b').textContent;
-    copyText(code).then(
+    const text = link.getAttribute('data-copy') || '';
+    const label = link.getAttribute('data-label') || 'Copy';
+    copyText(text).then(
       () => { link.textContent = 'Copied \u2713'; },
       () => { link.textContent = 'Copy failed'; }
     ).then(() => {
-      setTimeout(() => { link.textContent = 'Copy'; }, 1500);
+      setTimeout(() => { link.textContent = label; }, 1500);
     });
   });
 });
@@ -671,15 +735,9 @@ map.on('moveend', () => {
 const input = document.getElementById('searchInput');
 const suggBox = document.getElementById('suggestions');
 const clearSearchBtn = document.getElementById('clearSearchBtn');
-const pasteSearchBtn = document.getElementById('pasteSearchBtn');
 
-// Exactly one of the two is ever visible: clear while there's text to clear,
-// paste while the box is empty - so there's always a one-tap way either to
-// wipe the box or to get a FAT code into it.
 function updateClearSearchBtn() {
-  const hasText = input.value.length > 0;
-  clearSearchBtn.classList.toggle('visible', hasText);
-  pasteSearchBtn.classList.toggle('visible', !hasText);
+  clearSearchBtn.classList.toggle('visible', input.value.length > 0);
 }
 
 clearSearchBtn.addEventListener('click', () => {
@@ -687,25 +745,6 @@ clearSearchBtn.addEventListener('click', () => {
   suggBox.style.display = 'none';
   updateClearSearchBtn();
   input.focus();
-});
-
-pasteSearchBtn.addEventListener('click', async () => {
-  try {
-    const text = await navigator.clipboard.readText();
-    if (!text) { input.focus(); return; }
-    input.value = text;
-    // Runs the pasted text through the exact same sanitize/auto-format/
-    // auto-jump pipeline as a normal keyboard paste (handleSearchInput reads
-    // the current value itself, so no event object is needed here).
-    handleSearchInput();
-    input.focus();
-    input.setSelectionRange(input.value.length, input.value.length);
-  } catch (err) {
-    // navigator.clipboard.readText() needs HTTPS and clipboard-read
-    // permission; if it's blocked or unsupported, fall back to focusing the
-    // field so the user can paste manually (long-press > Paste, or Ctrl/Cmd+V).
-    input.focus();
-  }
 });
 
 function renderSuggestions(matches) {
@@ -816,7 +855,13 @@ function tryDMSSearch(q) {
 const FAT_SEGMENTS = [
   { literal: '', len: 3 },     // prefix, e.g. "108" / "MLT"
   { literal: 'R0', len: 1 },   // -> "R01"
-  { literal: 'FDT0', len: 1 }, // -> "FDT01" (leading 0 is auto-filled too)
+  // "FDT01"-"FDT09" (leading 0 auto-filled, so only 1 digit needs typing) is
+  // the common case. altLiteral/altLen is the fallback for FDT10-FDT99: if
+  // the person deletes the auto-filled "0" and types "FDT" + two digits
+  // directly, that raw 2-digit shape is recognized too, and auto-advance to
+  // "-FAT" resumes as soon as both digits are in - rather than giving up on
+  // auto-advance for the rest of the code.
+  { literal: 'FDT0', len: 1, altLiteral: 'FDT', altLen: 2 },
   { literal: 'FAT', len: 2 }   // -> "FAT99"
 ];
 const FAT_FREE_LEN = FAT_SEGMENTS.reduce((n, s) => n + s.len, 0); // 7
@@ -834,24 +879,33 @@ function looksLikeFatInProgress(text) {
 function parseFatFree(text) {
   const parts = text.split('-');
   let free = '';
+  let fdtVariant = 'auto0'; // which FDT shape matched - see FAT_SEGMENTS above
   for (let i = 0; i < FAT_SEGMENTS.length && i < parts.length; i++) {
     const seg = FAT_SEGMENTS[i];
     let part = parts[i];
     if (seg.literal) {
       if (part.startsWith(seg.literal)) {
         part = part.slice(seg.literal.length);
+      } else if (seg.altLiteral && part.startsWith(seg.altLiteral)) {
+        part = part.slice(seg.altLiteral.length);
+        fdtVariant = 'raw';
       } else {
-        // The expected literal isn't there (the person edited it by hand) -
-        // stop trying to interpret the structure and just take the rest of
-        // the text as-is, rather than fighting their edit.
-        free += parts.slice(i).join('');
-        return free.slice(0, FAT_FREE_LEN);
+        // The expected literal isn't there anymore - the person is typing
+        // something auto-advance's two known FDT shapes don't cover (e.g.
+        // they edited an already-formatted code by hand elsewhere). Signal
+        // "give up reformatting" (null) rather than guessing: patching
+        // mismatched text back into the segment structure is what used to
+        // misplace characters into the wrong segment (e.g. turning "FDT1"
+        // into "FDT0F"). From here on the person's own typing is left
+        // exactly as they typed it.
+        return null;
       }
     }
     free += part;
   }
   if (parts.length > FAT_SEGMENTS.length) free += parts.slice(FAT_SEGMENTS.length).join('');
-  return free.slice(0, FAT_FREE_LEN);
+  const maxLen = fdtVariant === 'raw' ? FAT_FREE_LEN + 1 : FAT_FREE_LEN; // raw FDT needs one extra digit slot
+  return { free: free.slice(0, maxLen), fdtVariant };
 }
 
 // Forward of parseFatFree: render the free characters typed so far as the
@@ -861,17 +915,21 @@ function parseFatFree(text) {
 // FAT code in the data, in which case auto-inserting the next "-FDT"/"-FAT"
 // would be pointless (e.g. nothing starts with "7FF", or nothing starts
 // with "722-R01-FDT99"): the text is left exactly as typed instead.
-function buildFatSkeleton(free) {
+function buildFatSkeleton(parsed) {
+  const { free, fdtVariant } = parsed;
+  const segs = fdtVariant === 'raw'
+    ? [FAT_SEGMENTS[0], FAT_SEGMENTS[1], { literal: 'FDT', len: 2 }, FAT_SEGMENTS[3]]
+    : FAT_SEGMENTS;
   const out = [];
   let i = 0;
-  for (let s = 0; s < FAT_SEGMENTS.length; s++) {
-    const seg = FAT_SEGMENTS[s];
+  for (let s = 0; s < segs.length; s++) {
+    const seg = segs[s];
     const slice = free.slice(i, i + seg.len);
     i += slice.length;
     out.push(seg.literal + slice);
     if (slice.length < seg.len) break;
 
-    if (s < FAT_SEGMENTS.length - 1) {
+    if (s < segs.length - 1) {
       const soFar = out.join('-');
       if (!allPoints.some(p => p.search.startsWith(soFar))) break;
     }
@@ -881,7 +939,9 @@ function buildFatSkeleton(free) {
 
 function autoFormatFat(text) {
   if (!looksLikeFatInProgress(text)) return text;
-  return buildFatSkeleton(parseFatFree(text));
+  const parsed = parseFatFree(text);
+  if (parsed === null) return text; // give up reformatting; see parseFatFree
+  return buildFatSkeleton(parsed);
 }
 
 function handleSearchInput(e) {
@@ -890,6 +950,24 @@ function handleSearchInput(e) {
 
   if (tryDMSSearch(q)) return;
   if (tryDecimalSearch(q)) return;
+
+  // A complete, exact FAT code (19 characters, exactly 3 "-") is checked
+  // BEFORE auto-format runs, and jumped to immediately if found - skipping
+  // auto-format entirely. auto-format assumes an in-progress code being
+  // typed forward one character at a time (where FDT/FAT are built up as
+  // "FDT0" + one more digit); a pasted - or fast-typed - code that's already
+  // complete doesn't match that shape when its FDT/FAT number is 10-19 (no
+  // leading 0), which corrupted it (e.g. "FDT10" becoming "FDT0F"). Checking
+  // the complete code first avoids ever feeding a finished code through that
+  // logic.
+  const dashCount = (q.match(/-/g) || []).length;
+  if (q.length === SEARCH_CODE_LENGTH && dashCount === 3) {
+    const exact = allPoints.find(p => p.search === q);
+    if (exact) {
+      goToPoint(exact.n);
+      return;
+    }
+  }
 
   // Only auto-advance while adding characters. Backspace/Delete (and
   // cutting a selection) are deliberately left as plain, ordinary deletion
@@ -900,17 +978,6 @@ function handleSearchInput(e) {
     if (formatted !== q) {
       q = formatted;
       input.value = q; // caret lands at the end, which is what forward typing wants
-    }
-  }
-
-  // A full FAT code (19 characters, exactly 3 "-") was typed/pasted: jump
-  // straight to it.
-  const dashCount = (q.match(/-/g) || []).length;
-  if (q.length === SEARCH_CODE_LENGTH && dashCount === 3) {
-    const exact = allPoints.find(p => p.search === q);
-    if (exact) {
-      goToPoint(exact.n);
-      return;
     }
   }
 
