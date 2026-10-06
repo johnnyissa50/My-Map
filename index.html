@@ -396,7 +396,12 @@ map.on('mousedown', (e) => {
   const latlng = e.latlng;
   longPressTimer = setTimeout(() => {
     longPressTimer = null;
-    L.popup()
+    // closeOnClick:false - releasing the finger/mouse after a motionless
+    // hold is itself seen by Leaflet as a "click" on the map, and every
+    // popup closes on the very next map click by default. Without this
+    // option the popup we just opened would close itself the instant the
+    // press that opened it was released.
+    L.popup({ closeOnClick: false })
       .setLatLng(latlng)
       .setContent(coordPopupContent(latlng.lat, latlng.lng))
       .openOn(map);
