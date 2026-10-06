@@ -41,6 +41,13 @@
     -webkit-user-select: none;
     user-select: none;
     -webkit-tap-highlight-color: transparent;
+    /* Tells the browser/OS not to handle this element's touch gestures
+       itself at all (panning, long-press, etc.) and leave the whole touch
+       sequence to our own JS - -webkit-touch-callout alone isn't always
+       honored by Safari for <img> elements (the map tiles), which is the
+       likely reason a motionless hold on iPhone could be intercepted before
+       our long-press timer ever got to finish. */
+    touch-action: none;
   }
   /* Popups are the exception: allow selecting/copying the FAT code with
      mouse drag / double-click on desktop and long-press on mobile. The
@@ -370,6 +377,12 @@ const LONG_PRESS_MS = 1000;
 // trivial even for a few thousand points since it only runs once per press.
 const LONG_PRESS_POINT_THRESHOLD_PX = 25;
 const LONG_PRESS_MOVE_TOLERANCE_PX = 18; // finger drift beyond this cancels the hold (loose enough to absorb normal touchscreen jitter)
+
+// Extra safety net alongside touch-action:none above: explicitly block the
+// native long-press/right-click context menu on the map so the OS can never
+// swallow the hold or cover the page with its own menu before our timer
+// finishes.
+map.getContainer().addEventListener('contextmenu', (e) => e.preventDefault());
 
 let longPressTimer = null;
 let longPressStartPx = null;
