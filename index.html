@@ -386,16 +386,30 @@ map.getContainer().addEventListener('contextmenu', (e) => e.preventDefault());
 
 let longPressTimer = null;
 let longPressStartPx = null;
-let coordPopup = null;          // the currently-open long-press popup, if any
-let suppressNextMapClick = false; // true only for the one click caused by releasing the press that opened it
+let coordPopup = null;      // the currently-open long-press popup, if any
+let coordPopupOpenedAt = 0; // Date.now() of the moment it opened
 
-// A click elsewhere (a genuinely new click, not the release that opened the
-// popup) closes it - closeOnClick is turned off on the popup itself (below)
-// specifically so that very first click doesn't close it; this handler
-// takes over closing it for every click after that.
+// Releasing the finger/mouse that completed the hold is itself seen by
+// Leaflet as a "click" on the map - and on iPhone specifically, that single
+// physical release seems to produce more than one such 'click' event (a
+// known compatibility quirk of touch browsers, which can synthesize an
+// extra mouse-style click alongside Leaflet's own touch-tap click for the
+// same release). A one-shot "ignore exactly the next click" flag only
+// absorbs one of them, leaving the other to close the popup the instant it
+// opens - which is what made it look like dismissing needed an extra, real
+// tap. A short time-based grace window instead ignores ALL clicks for a
+// brief moment right after opening, however many of them fire, and only
+// treats a click as a genuine dismiss once that moment has passed.
+const COORD_POPUP_OPEN_GRACE_MS = 400;
+
+// A click elsewhere (a genuinely new click, not one caused by the release
+// that opened the popup) closes it - closeOnClick is turned off on the
+// popup itself (below) specifically so that release doesn't close it; this
+// handler takes over closing it for every later click instead.
 map.on('click', () => {
-  if (suppressNextMapClick) { suppressNextMapClick = false; return; }
-  if (coordPopup) { map.closePopup(coordPopup); }
+  if (!coordPopup) return;
+  if (Date.now() - coordPopupOpenedAt < COORD_POPUP_OPEN_GRACE_MS) return;
+  map.closePopup(coordPopup);
 });
 
 function isNearAnyPoint(containerPoint, thresholdPx) {
@@ -419,14 +433,7 @@ function startLongPress(containerPoint, latlng) {
   longPressStartPx = containerPoint;
   longPressTimer = setTimeout(() => {
     longPressTimer = null;
-    // Releasing the finger/mouse after a motionless hold is itself seen by
-    // Leaflet as a "click" on the map, and every popup closes on the very
-    // next map click by default (closeOnClick). closeOnClick:false turns
-    // that off for THIS popup, and suppressNextMapClick skips exactly that
-    // one release-click in our own handler below - so the popup survives
-    // being opened, but a later, separate click elsewhere still closes it
-    // normally through that handler.
-    suppressNextMapClick = true;
+    coordPopupOpenedAt = Date.now();
     coordPopup = L.popup({ closeOnClick: false })
       .setLatLng(latlng)
       .setContent(coordPopupContent(latlng.lat, latlng.lng))
