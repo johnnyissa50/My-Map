@@ -162,7 +162,7 @@
     opacity:0.85; pointer-events:none;
   }
   #visitCounter img { display:block; height:20px; }
-  /* Measure-distance tool: sits under the +/- zoom buttons (top-right). */
+  /* Measure-distance tool: sits under the compass button (top-right). */
   .leaflet-bar.measure-control a {
     display:flex; align-items:center; justify-content:center; color:#222;
   }
@@ -175,7 +175,7 @@
     padding:5px 10px; border-radius:6px; box-shadow:0 1px 5px rgba(0,0,0,.4);
     white-space:nowrap; pointer-events:none;
   }
-  /* Compass-rotation toggle: sits under the measure button (top-right). */
+  /* Compass-rotation toggle: sits right under the +/- zoom buttons (top-right). */
   .leaflet-bar.compass-control a {
     display:flex; align-items:center; justify-content:center; color:#222;
   }
@@ -313,10 +313,9 @@ const MeasureControl = L.Control.extend({
     return wrap;
   }
 });
-new MeasureControl().addTo(map);
 
 // ---- Compass rotation (rotate the map with the phone's compass) -----------
-// Button under the measure tool. OFF by default (map stays north-up). Tap it
+// Button right under the +/- zoom buttons (the measure tool is below it). OFF by default (map stays north-up). Tap it
 // to turn the map so that the direction you are facing is always "up";
 // tap again to switch it off and return to north-up. The phone's compass
 // sensor is only listened to while this is ON.
@@ -507,6 +506,8 @@ const CompassControl = L.Control.extend({
   }
 });
 new CompassControl().addTo(map);
+// Added after the compass button so it sits below it (controls stack in the order added).
+new MeasureControl().addTo(map);
 
 function formatMeters(m) {
   return Math.round(m).toLocaleString('en-US') + ' m';
