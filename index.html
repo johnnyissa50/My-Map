@@ -1486,6 +1486,46 @@ document.addEventListener('click', (e) => {
   }
 });
 
+// ---- Visit log (Google Sheets) -------------------------------------------
+// Each device gets a random ID kept in localStorage. Once per page open, the
+// ID + the first location fix (decimal degrees) are sent to a Google Apps
+// Script web app, which keeps ONE row per device in the sheet.
+const VISIT_LOG_URL = 'https://script.google.com/macros/s/AKfycbz3U-pu2BFU0HWQqH-XfU_xydoLyTfMCcNjPVCLoHbVp6V1TXwJaaVjOUWtvNx2GIFs/exec';
+let visitLogged = false;
+
+function getDeviceId() {
+  try {
+    let id = localStorage.getItem('deviceId');
+    if (!id) {
+      id = (window.crypto && crypto.randomUUID)
+        ? crypto.randomUUID()
+        : 'd-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 10);
+      localStorage.setItem('deviceId', id);
+    }
+    return id;
+  } catch (e) {
+    return 'd-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 10);
+  }
+}
+
+function logVisitOnce(lat, lng) {
+  if (visitLogged || VISIT_LOG_URL.indexOf('PASTE_') === 0) return;
+  visitLogged = true;
+  const hasLoc = isFinite(lat) && isFinite(lng);
+  const body = JSON.stringify({
+    id: getDeviceId(),
+    lat: hasLoc ? Number(lat.toFixed(6)) : '',
+    lng: hasLoc ? Number(lng.toFixed(6)) : ''
+  });
+  try {
+    // text/plain + no-cors = no preflight, works from any static site.
+    fetch(VISIT_LOG_URL, { method: 'POST', mode: 'no-cors', keepalive: true,
+      headers: { 'Content-Type': 'text/plain;charset=utf-8' }, body: body }).catch(() => {});
+  } catch (e) {}
+}
+// If no location arrives (permission denied / no GPS), still count the device.
+setTimeout(() => logVisitOnce(NaN, NaN), 60000);
+
 // ---- Locate me ----
 const locateBtn = document.getElementById('locateBtn');
 let userMarker = null;
@@ -1509,6 +1549,7 @@ function onLocationFound(pos, recenter) {
   const lat = pos.coords.latitude;
   const lng = pos.coords.longitude;
   updateUserMarker(lat, lng);
+  logVisitOnce(lat, lng);
   if (recenter) map.setView([lat, lng], 17, { animate: true });
   locateBtn.classList.remove('active');
 }
