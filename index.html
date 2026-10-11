@@ -175,6 +175,20 @@
     padding:5px 10px; border-radius:6px; box-shadow:0 1px 5px rgba(0,0,0,.4);
     white-space:nowrap; pointer-events:none;
   }
+  /* Compass-rotation toggle: sits under the measure button (top-right). */
+  .leaflet-bar.compass-control a {
+    display:flex; align-items:center; justify-content:center; color:#222;
+  }
+  .leaflet-bar.compass-control a.active,
+  .leaflet-bar.compass-control a.active:hover { background:#1a73e8; color:#fff; }
+  .compass-control svg { display:block; }
+  /* Small message bubble (permission denied / no compass on this device) */
+  #toast {
+    position:fixed; left:50%; bottom:calc(56px + env(safe-area-inset-bottom, 0px));
+    transform:translateX(-50%); z-index:2000; display:none; max-width:80%;
+    background:rgba(0,0,0,.82); color:#fff; font-size:13px; text-align:center;
+    padding:8px 14px; border-radius:8px; pointer-events:none;
+  }
   #map.measuring, #map.measuring .leaflet-grab, #map.measuring .leaflet-interactive { cursor:crosshair; }
   /* While measuring, FAT points must not swallow the tap (they would open a
      popup and stop it before it reaches the map). Making them click-through
@@ -214,11 +228,13 @@
   </button>
 </div>
 <div id="map"></div>
+<div id="toast"></div>
 <div id="visitCounter">
   <img src="https://visitor-badge.laobi.icu/badge?page_id=masiraq.fat-map.github.io&left_color=gray&right_color=blue" alt="visits" />
 </div>
 
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script src="https://unpkg.com/leaflet-rotate@0.2.8/dist/leaflet-rotate-src.js"></script>
 <script src="https://unpkg.com/leaflet.markercluster@1.5.3/dist/leaflet.markercluster.js"></script>
 <script src="https://unpkg.com/papaparse@5.4.1/papaparse.min.js"></script>
 <script src="https://unpkg.com/leaflet-doubletapdrag@0.1.2"></script>
@@ -239,7 +255,18 @@ const map = L.map('map', {
   // Instead they simply disappear during the zoom and reappear,
   // already re-clustered, once the zoom finishes — this removes the
   // brief flash of unclustered markers at the new zoom level.
-  markerZoomAnimation: false
+  markerZoomAnimation: false,
+  // Rotation support (leaflet-rotate plugin). The map still starts north-up
+  // (bearing 0) and nothing rotates by itself: the plugin's own two-finger
+  // rotate gesture, shift+drag rotate, on-screen compass control and its
+  // built-in compass handler are all switched off - the ONLY thing that
+  // rotates the map is the compass button below, driven by the phone sensor.
+  rotate: true,
+  bearing: 0,
+  touchRotate: false,
+  shiftKeyRotate: false,
+  rotateControl: false,
+  compassBearing: false
 }).setView([36.85, 42.97], 10);
 L.control.zoom({ position: 'topright' }).addTo(map);
 
@@ -287,6 +314,199 @@ const MeasureControl = L.Control.extend({
   }
 });
 new MeasureControl().addTo(map);
+
+// ---- Compass rotation (rotate the map with the phone's compass) -----------
+// Button under the measure tool. OFF by default (map stays north-up). Tap it
+// to turn the map so that the direction you are facing is always "up";
+// tap again to switch it off and return to north-up. The phone's compass
+// sensor is only listened to while this is ON.
+const COMPASS_ICON =
+  '<svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" ' +
+  'stroke-width="2" stroke-linecap="round" stroke-linejoin="round">' +
+  '<circle cx="12" cy="12" r="9.5"/>' +
+  '<path d="M12 5 15.2 12h-6.4z" fill="currentColor"/><path d="M12 19 8.8 12h6.4z"/></svg>';
+
+let compassOn = false;
+let compassBusy = false;       // true while the iOS permission prompt is open
+let compassBtn = null;
+let compassSvg = null;
+let compassEvt = null;         // DOM event name currently listened to
+let compassTarget = null;      // smoothed heading the map is heading towards (0-360)
+let compassShown = null;       // heading currently applied to the map
+let compassTimer = null;
+let compassWatchdog = null;    // fires if the sensor never delivers a reading
+let bearingSign = null;        // +1: setBearing(b) turns the map clockwise by b; -1: counter-clockwise
+let lastSyncBearing = 0;
+let lastSyncAt = 0;
+let toastTimer = null;
+
+function showToast(msg) {
+  const el = document.getElementById('toast');
+  el.textContent = msg;
+  el.style.display = 'block';
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => { el.style.display = 'none'; }, 3000);
+}
+
+// Shortest signed turn (degrees) from angle a to angle b, in [-180, 180).
+function angDiff(a, b) { return ((b - a + 540) % 360) - 180; }
+
+function screenAngle() {
+  let a = 0;
+  if (window.screen && screen.orientation && typeof screen.orientation.angle === 'number') a = screen.orientation.angle;
+  else if (typeof window.orientation === 'number') a = window.orientation;
+  return ((a % 360) + 360) % 360;
+}
+
+// Heading (degrees clockwise from north) of the direction the person is
+// facing, from the sensor's alpha/beta/gamma angles. Held flat or lightly
+// tilted, that's where the top edge of the screen points; held (nearly)
+// upright, the top edge points at the sky and tells us nothing, so it
+// switches over to the direction the back of the phone faces instead.
+function headingFromEuler(alpha, beta, gamma) {
+  const r = Math.PI / 180;
+  const a = alpha * r, b = beta * r, g = gamma * r;
+  const sa = Math.sin(a), ca = Math.cos(a);
+  const sb = Math.sin(b), cb = Math.cos(b);
+  const sg = Math.sin(g), cg = Math.cos(g);
+  let tx = -sa * cb, ty = ca * cb;                          // top edge, flattened onto the ground
+  let bx = -(ca * sg + sa * sb * cg), by = ca * sb * cg - sa * sg; // back of the phone, flattened
+  const tl = Math.hypot(tx, ty) || 1, bl = Math.hypot(bx, by) || 1;
+  tx /= tl; ty /= tl; bx /= bl; by /= bl;
+  const w = Math.min(1, Math.max(0, (beta - 55) / 20));     // 0 below 55 deg tilt, 1 above 75
+  const x = tx * (1 - w) + bx * w, y = ty * (1 - w) + by * w;
+  return (Math.atan2(x, y) * 180 / Math.PI + 360) % 360;
+}
+
+// The plugin's setBearing() direction convention is checked once, on the
+// real map, instead of assumed: turn it to 90, see which way north went on
+// screen, turn it back (all in one go, so nothing is ever drawn).
+function getBearingSign() {
+  if (bearingSign !== null) return bearingSign;
+  bearingSign = 1;
+  try {
+    const before = map.getBearing();
+    const c = map.getCenter();
+    map.setBearing(90);
+    const p0 = map.latLngToContainerPoint(c);
+    const p1 = map.latLngToContainerPoint(L.latLng(c.lat + 0.01, c.lng));
+    map.setBearing(before);
+    const ang = Math.atan2(p1.x - p0.x, -(p1.y - p0.y)) * 180 / Math.PI; // north's angle on screen, clockwise from up
+    if (ang > 45) bearingSign = 1;
+    else if (ang < -45) bearingSign = -1;
+  } catch (err) { console.error(err); }
+  return bearingSign;
+}
+
+function onCompassEvent(e) {
+  let h = null;
+  if (typeof e.webkitCompassHeading === 'number' && !isNaN(e.webkitCompassHeading)) {
+    h = e.webkitCompassHeading;                      // iOS: already clockwise from north
+  } else if (e.alpha !== null && e.alpha !== undefined) {
+    if (compassEvt === 'deviceorientation' && e.absolute !== true) return; // relative alpha is not a compass
+    h = headingFromEuler(e.alpha, e.beta || 0, e.gamma || 0);
+  }
+  if (h === null || isNaN(h)) return;
+  h = (h + screenAngle() + 360) % 360;
+
+  clearTimeout(compassWatchdog);
+  compassWatchdog = null;
+  // Smooth out sensor noise (circular low-pass filter).
+  compassTarget = compassTarget === null ? h : (compassTarget + angDiff(compassTarget, h) * 0.25 + 360) % 360;
+}
+
+// Runs a few times a second: eases the map towards the latest heading and
+// ignores tiny jitter so a phone held still doesn't make the map shiver.
+function compassTick() {
+  if (compassTarget === null) return;
+  if (compassShown === null) compassShown = compassTarget;
+  const d = angDiff(compassShown, compassTarget);
+  if (Math.abs(d) < 0.7) return;
+  compassShown = (compassShown + d * 0.5 + 360) % 360;
+
+  const bearing = ((-getBearingSign() * compassShown) % 360 + 360) % 360;
+  map.setBearing(bearing);
+  if (compassSvg) compassSvg.style.transform = 'rotate(' + (-compassShown) + 'deg)'; // needle keeps pointing at north
+
+  // Rotating uncovers new corners of the screen: now and then, ask the map
+  // layers (tiles, clusters, dots) to fill them in, like after a pan.
+  const now = Date.now();
+  if (now - lastSyncAt > 600 && Math.abs(angDiff(lastSyncBearing, bearing)) >= 4) {
+    lastSyncBearing = bearing;
+    lastSyncAt = now;
+    map.fire('moveend');
+  }
+}
+
+function disableCompass() {
+  compassOn = false;
+  if (compassEvt) { window.removeEventListener(compassEvt, onCompassEvent, true); compassEvt = null; }
+  clearInterval(compassTimer); compassTimer = null;
+  clearTimeout(compassWatchdog); compassWatchdog = null;
+  compassTarget = null;
+  compassShown = null;
+  if (typeof map.setBearing === 'function') map.setBearing(0);
+  if (compassSvg) compassSvg.style.transform = '';
+  if (compassBtn) compassBtn.classList.remove('active');
+  lastSyncBearing = 0;
+  map.fire('moveend');
+}
+
+async function enableCompass() {
+  if (typeof map.setBearing !== 'function') { showToast('Map rotation could not be loaded'); return; }
+  if (!('DeviceOrientationEvent' in window)) { showToast('Compass is not available on this device'); return; }
+
+  // iPhone/iPad (iOS 13+) only hand out compass data after the person
+  // agrees, and the request has to be made from inside this very tap.
+  if (typeof DeviceOrientationEvent.requestPermission === 'function') {
+    compassBusy = true;
+    try {
+      const res = await DeviceOrientationEvent.requestPermission();
+      if (res !== 'granted') { showToast('Compass permission was denied'); return; }
+    } catch (err) {
+      showToast('Compass permission was denied');
+      return;
+    } finally {
+      compassBusy = false;
+    }
+  }
+
+  getBearingSign();
+  compassEvt = ('ondeviceorientationabsolute' in window) ? 'deviceorientationabsolute' : 'deviceorientation';
+  window.addEventListener(compassEvt, onCompassEvent, true);
+  compassTimer = setInterval(compassTick, 100);
+  compassOn = true;
+  compassBtn.classList.add('active');
+  // No reading at all within a few seconds = this device has no compass.
+  compassWatchdog = setTimeout(() => {
+    if (compassOn && compassTarget === null) {
+      disableCompass();
+      showToast('Compass is not available on this device');
+    }
+  }, 3000);
+}
+
+const CompassControl = L.Control.extend({
+  options: { position: 'topright' },
+  onAdd: function () {
+    const bar = L.DomUtil.create('div', 'leaflet-bar compass-control');
+    compassBtn = L.DomUtil.create('a', '', bar);
+    compassBtn.href = '#';
+    compassBtn.title = 'Rotate map with compass';
+    compassBtn.setAttribute('role', 'button');
+    compassBtn.setAttribute('aria-label', 'Rotate map with compass');
+    compassBtn.innerHTML = COMPASS_ICON;
+    compassSvg = compassBtn.firstChild;
+    L.DomEvent.disableClickPropagation(bar);
+    L.DomEvent.on(compassBtn, 'click', function (e) {
+      L.DomEvent.preventDefault(e);
+      if (compassBusy) return;
+      if (compassOn) disableCompass(); else enableCompass();
+    });
+    return bar;
+  }
+});
+new CompassControl().addTo(map);
 
 function formatMeters(m) {
   return Math.round(m).toLocaleString('en-US') + ' m';
@@ -677,12 +897,25 @@ function makeCircleMarker(p, withLabel) {
   return c;
 }
 
+// Geographic box that contains the whole visible screen, even when the map is
+// rotated: built from the four screen corners (always correct, whatever the
+// rotation) instead of relying on map.getBounds().
+function visibleBounds() {
+  const sz = map.getSize();
+  return L.latLngBounds([
+    map.containerPointToLatLng(L.point(0, 0)),
+    map.containerPointToLatLng(L.point(sz.x, 0)),
+    map.containerPointToLatLng(L.point(0, sz.y)),
+    map.containerPointToLatLng(L.point(sz.x, sz.y))
+  ]);
+}
+
 // Incremental: only adds points newly entering the view / removes points
 // that left it. Safe to call often (e.g. on every 'moveend' while panning).
 function refreshDenseLayerIncremental() {
   if (map.getZoom() < DENSE_ZOOM || !allPoints.length) return;
   const withLabel = map.getZoom() >= LABEL_ZOOM;
-  const bounds = map.getBounds().pad(0.3); // small buffer so points don't pop in/out abruptly
+  const bounds = visibleBounds().pad(0.3); // small buffer so points don't pop in/out abruptly
   const wantNames = new Set();
 
   for (let i = 0; i < allPoints.length; i++) {
