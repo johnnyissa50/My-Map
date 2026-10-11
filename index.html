@@ -168,6 +168,12 @@
   }
   .leaflet-bar.measure-control a.active,
   .leaflet-bar.measure-control a.active:hover { background:#1a73e8; color:#fff; }
+  .leaflet-bar.measure-control { position:relative; }
+  /* Undo button: under the ruler button, only visible while there are points */
+  .leaflet-bar.measure-undo { display:none; margin-top:6px; }
+  .leaflet-bar.measure-undo a {
+    display:flex; align-items:center; justify-content:center; color:#222;
+  }
   /* Live total, shown to the left of the button while measuring */
   .measure-readout {
     position:absolute; right:calc(100% + 8px); top:50%; transform:translateY(-50%);
@@ -277,6 +283,10 @@ L.control.zoom({ position: 'topright' }).addTo(map);
 // Nothing is created until measuring starts, and only the last segment is
 // added on each tap (the total is accumulated, never recomputed), so it costs
 // nothing while idle and stays cheap on long paths.
+const UNDO_ICON =
+  '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" ' +
+  'stroke-width="2" stroke-linecap="round" stroke-linejoin="round">' +
+  '<path d="M9 14 4 9l5-5"/><path d="M4 9h10.5a5.5 5.5 0 0 1 0 11H11"/></svg>';
 const MEASURE_ICON =
   '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" ' +
   'stroke-width="2" stroke-linecap="round" stroke-linejoin="round">' +
@@ -290,6 +300,11 @@ let measureCasing = null;  // dark outline under the path (readable on any image
 let measureLine = null;
 let lastMeasureEvent = null;
 let measureBtn = null;
+let measureUndoBar = null;
+let measureUndoBtn = null;
+let measurePts = [];       // points drawn so far
+let measureMarks = [];     // their dot markers
+let measureSegs = [];      // distance added by each point (0 for the first)
 let measureOut = null;
 
 const MeasureControl = L.Control.extend({
@@ -303,7 +318,18 @@ const MeasureControl = L.Control.extend({
     measureBtn.setAttribute('role', 'button');
     measureBtn.setAttribute('aria-label', 'Measure distance');
     measureBtn.innerHTML = MEASURE_ICON;
-    measureOut = L.DomUtil.create('div', 'measure-readout', wrap);
+    measureOut = L.DomUtil.create('div', 'measure-readout', bar);
+    measureUndoBar = L.DomUtil.create('div', 'leaflet-bar measure-undo', wrap);
+    measureUndoBtn = L.DomUtil.create('a', '', measureUndoBar);
+    measureUndoBtn.href = '#';
+    measureUndoBtn.title = 'Undo last point';
+    measureUndoBtn.setAttribute('role', 'button');
+    measureUndoBtn.setAttribute('aria-label', 'Undo last point');
+    measureUndoBtn.innerHTML = UNDO_ICON;
+    L.DomEvent.on(measureUndoBtn, 'click', function (e) {
+      L.DomEvent.preventDefault(e);
+      undoMeasurePoint();
+    });
     // Presses on the control must not reach the map (or they'd add a point).
     L.DomEvent.disableClickPropagation(wrap);
     L.DomEvent.on(measureBtn, 'click', function (e) {
@@ -517,6 +543,8 @@ function startMeasure() {
   measuring = true;
   measureTotal = 0;
   measureLast = null;
+  measurePts = []; measureMarks = []; measureSegs = [];
+  measureUndoBar.style.display = 'none';
   const svg = L.svg({ padding: 0.5 }); // separate from the canvas point layer
   measureCasing = L.polyline([], { renderer: svg, interactive: false, color: '#000', weight: 6, opacity: 0.55 });
   measureLine = L.polyline([], { renderer: svg, interactive: false, color: '#FFD400', weight: 3 });
@@ -537,6 +565,8 @@ function stopMeasure() {
   if (measureLayer) { measureLayer.clearLayers(); measureLayer.remove(); }
   measureLayer = measureCasing = measureLine = measureLast = null;
   measureTotal = 0;
+  measurePts = []; measureMarks = []; measureSegs = [];
+  measureUndoBar.style.display = 'none';
   measureBtn.classList.remove('active');
   measureOut.style.display = 'none';
   map.getContainer().classList.remove('measuring');
@@ -571,14 +601,36 @@ function addMeasurePoint(e) {
   }
 
   const ll = snapToFat(e.latlng);
-  if (measureLast) measureTotal += map.distance(measureLast, ll);
+  const seg = measureLast ? map.distance(measureLast, ll) : 0;
+  measureTotal += seg;
   measureLast = ll;
+  measurePts.push(ll);
+  measureSegs.push(seg);
   measureCasing.addLatLng(ll);
   measureLine.addLatLng(ll);
-  measureLayer.addLayer(L.circleMarker(ll, {
+  const dot = L.circleMarker(ll, {
     renderer: measureLine.options.renderer, interactive: false,
     radius: 4, color: '#000', weight: 2, fillColor: '#FFD400', fillOpacity: 1
-  }));
+  });
+  measureLayer.addLayer(dot);
+  measureMarks.push(dot);
+  measureOut.textContent = formatMeters(measureTotal);
+  measureUndoBar.style.display = 'block';
+}
+
+// Remove the most recently added point (repeat to step back further).
+function undoMeasurePoint() {
+  if (!measuring || !measurePts.length) return;
+  measurePts.pop();
+  measureTotal -= measureSegs.pop();
+  measureLayer.removeLayer(measureMarks.pop());
+  measureCasing.setLatLngs(measurePts);
+  measureLine.setLatLngs(measurePts);
+  measureLast = measurePts.length ? measurePts[measurePts.length - 1] : null;
+  if (!measurePts.length) {
+    measureTotal = 0;
+    measureUndoBar.style.display = 'none';
+  }
   measureOut.textContent = formatMeters(measureTotal);
 }
 
