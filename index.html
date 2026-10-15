@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, viewport-fit=cover">
 <!-- Colors the browser UI strip above/below the page (status bar / bottom bar)
      instead of leaving it default white/red — now a neutral gray. -->
-<meta name="theme-color" content="#4a4a4a">
+<meta name="theme-color" content="#4a4a4a" id="themeColorMeta">
 <!-- If the page is ever added to the Home Screen, these make it launch as a
      standalone app with a translucent status bar, so the page's own gray
      background shows through behind the notch instead of the OS drawing a
@@ -215,6 +215,30 @@
   #map.measuring .coord-icon,
   #map.measuring .coord-icon * { pointer-events:none !important; }
   #map.measuring .leaflet-overlay-pane canvas { pointer-events:none !important; }
+
+  /* ---- Filter "0 User" button + red theme ---- */
+  /* Floating button, bottom-right corner (outside the top bar) */
+  #filterBtn {
+    position:fixed; right:8px; bottom:calc(8px + env(safe-area-inset-bottom, 0px)); z-index:1100;
+    height:40px; padding:0 12px; border-radius:8px; border:2px solid transparent;
+    background:#9e9e9e; color:#fff; font-size:13px; font-weight:700; cursor:pointer;
+    white-space:nowrap; box-shadow:0 2px 4px rgba(0,0,0,.2); box-sizing:border-box;
+    opacity:.6; /* 40% transparent while off */
+    -webkit-tap-highlight-color:transparent;
+  }
+  #filterBtn:active { opacity:.8; }
+  #filterBtn.active { background:#ff0000; border-color:#fff; opacity:1; }
+  /* Red frame around the whole screen while the filter is on */
+  #filterFrame {
+    position:fixed; top:0; left:0; right:0; bottom:0; box-sizing:border-box;
+    border:4px solid #e00000; z-index:1500; pointer-events:none; display:none;
+  }
+  html.filter-on #filterFrame { display:block; }
+  html.filter-on, html.filter-on body { background:#d50000; }
+  html.filter-on #topbar { background:#d50000; }
+  html.filter-on #locateBtn svg, html.filter-on #layerBtn svg { fill:#d50000; }
+  html.filter-on #locateBtn.active { background:#d50000; }
+  html.filter-on #locateBtn.active svg { fill:#fff; }
 </style>
 </head>
 <body>
@@ -242,6 +266,8 @@
   </button>
 </div>
 <div id="map"></div>
+<div id="filterFrame"></div>
+<button id="filterBtn" title="Show only FATs with 0 installed ONTs">Filter 0 User</button>
 <div id="toast"></div>
 <div id="visitCounter">
   <img src="https://visitor-badge.laobi.icu/badge?page_id=masiraq.fat-map.github.io&left_color=gray&right_color=blue" alt="visits" />
@@ -734,8 +760,9 @@ map.on('click', () => {
 });
 
 function isNearAnyPoint(containerPoint, thresholdPx) {
-  for (let i = 0; i < allPoints.length; i++) {
-    const p = allPoints[i];
+  const pts = activePoints();
+  for (let i = 0; i < pts.length; i++) {
+    const p = pts[i];
     const px = map.latLngToContainerPoint([p.lat, p.lng]);
     if (containerPoint.distanceTo(px) <= thresholdPx) return true;
   }
@@ -880,6 +907,13 @@ const LABEL_ZOOM = 18; // permanent name labels appear from this zoom
 
 let allPoints = [];
 let pointByName = {};
+let allClusterMarkers = [];
+let filterOn = false; // "Filter 0 User": show only FATs whose Installed ONTs is 0
+
+// Points currently allowed to be shown (all, or only the zero-ONT ones).
+function activePoints() {
+  return filterOn ? allPoints.filter(p => p.zero) : allPoints;
+}
 
 // Partner -> dot color. Anything not listed here (missing, "#N/A", or spelled
 // differently) falls back to gray. Exact match after trimming whitespace.
@@ -1019,8 +1053,9 @@ function refreshDenseLayerIncremental() {
   const bounds = visibleBounds().pad(0.3); // small buffer so points don't pop in/out abruptly
   const wantNames = new Set();
 
-  for (let i = 0; i < allPoints.length; i++) {
-    const p = allPoints[i];
+  const pts = activePoints();
+  for (let i = 0; i < pts.length; i++) {
+    const p = pts[i];
     if (!bounds.contains([p.lat, p.lng])) continue;
     wantNames.add(p.n);
     if (!denseMarkers.has(p.n)) {
@@ -1078,7 +1113,8 @@ fetch('data.csv')
       const ont = (row['Installed ONTs'] || '').trim();
       data.push({
         n: name, search: name.toUpperCase(), lat: lat, lng: lng, c: color,
-        pt: partner || 'Unknown', ont: ont || 'Unknown'
+        pt: partner || 'Unknown', ont: ont || 'Unknown',
+        zero: ont !== '' && Number(ont) === 0
       });
     });
 
@@ -1092,10 +1128,12 @@ fetch('data.csv')
       // Regular marker, used while clustered (zoom < DENSE_ZOOM)
       const m = L.marker([p.lat, p.lng], { icon: getPointIcon(p.c) });
       m.bindPopup(popupContent(p));
+      m._p = p;
       clusterMarkers.push(m);
     });
 
-    clusterGroup.addLayers(clusterMarkers);
+    allClusterMarkers = clusterMarkers;
+    clusterGroup.addLayers(filterOn ? clusterMarkers.filter(m => m._p.zero) : clusterMarkers);
     // Force a real render here: if auto-locate already panned/zoomed the
     // map (and fired zoomend) before this data finished loading,
     // denseMode/labelMode may already "match" the current zoom even
@@ -1150,6 +1188,29 @@ map.on('zoomend', updateActiveLayer);
 map.on('moveend', () => {
   // Pure panning (zoom unchanged): cheap incremental add/remove only.
   refreshDenseLayerIncremental();
+});
+
+// ---- Filter 0 User toggle ----
+const filterBtn = document.getElementById('filterBtn');
+const themeMeta = document.getElementById('themeColorMeta');
+
+function applyFilter() {
+  document.documentElement.classList.toggle('filter-on', filterOn);
+  filterBtn.classList.toggle('active', filterOn);
+  if (themeMeta) themeMeta.setAttribute('content', filterOn ? '#d50000' : '#4a4a4a');
+
+  // Clustered view (low zoom)
+  clusterGroup.clearLayers();
+  clusterGroup.addLayers(filterOn ? allClusterMarkers.filter(m => m._p.zero) : allClusterMarkers);
+  // Dense view (high zoom)
+  if (denseMode) rebuildDenseLayer();
+  // Close any open popup of a point that may now be hidden
+  map.closePopup();
+}
+
+filterBtn.addEventListener('click', () => {
+  filterOn = !filterOn;
+  applyFilter();
 });
 
 const input = document.getElementById('searchInput');
