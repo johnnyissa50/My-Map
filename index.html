@@ -161,7 +161,14 @@
     position:absolute; bottom:calc(8px + env(safe-area-inset-bottom, 0px)); left:8px; z-index:900;
     opacity:0.85; pointer-events:none;
   }
+  #visitCounter { display:flex; align-items:center; gap:6px; }
   #visitCounter img { display:block; height:20px; }
+  /* Live GPS accuracy (error margin) in meters, to the right of the visitors badge */
+  #gpsAccuracy {
+    height:20px; line-height:20px; box-sizing:border-box; padding:0 8px;
+    border-radius:3px; background:#555; color:#fff;
+    font:600 11px/20px Verdana, 'Segoe UI', sans-serif; white-space:nowrap;
+  }
   /* Measure-distance tool: sits under the compass button (top-right). */
   .leaflet-bar.measure-control a {
     display:flex; align-items:center; justify-content:center; color:#222;
@@ -271,6 +278,7 @@
 <div id="toast"></div>
 <div id="visitCounter">
   <img src="https://visitor-badge.laobi.icu/badge?page_id=masiraq.fat-map.github.io&left_color=gray&right_color=blue" alt="visits" />
+  <span id="gpsAccuracy">GPS ± -- m</span>
 </div>
 
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
@@ -853,21 +861,52 @@ map.on('zoomstart', cancelLongPress);
 map.on('popupopen', function (e) {
   if (measuring && e.popup._source) e.popup.close();
 });
-const streetLayer = L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
-  maxZoom: 19,
-  attribution: '&copy; OpenStreetMap contributors'
+// ---- Basemap providers (fallback order: Google -> Esri -> OpenStreetMap) ----
+// maxNativeZoom = the last zoom level the provider really has tiles for.
+// maxZoom is the same (20) for ALL layers, so switching provider while zoomed
+// in (19-20) never produces a blank map: tiles are just upscaled instead.
+const PROVIDERS = {
+  google: {
+    label: 'Google Satellite',
+    url: 'https://{s}.google.com/vt/lyrs=s&x={x}&y={y}&z={z}',
+    subdomains: ['mt0', 'mt1', 'mt2', 'mt3'],
+    maxNativeZoom: 20,
+    attribution: 'Imagery &copy; Google',
+    bust: true
+  },
+  esri: {
+    label: 'Esri Satellite',
+    url: 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',
+    subdomains: ['a'],
+    maxNativeZoom: 19,
+    attribution: 'Tiles &copy; Esri, Maxar, Earthstar Geographics',
+    gapProne: true, // areas without imagery at high zoom answer 404 (looks like an error)
+    bust: true
+  },
+  street: {
+    label: 'OpenStreetMap',
+    url: 'https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',
+    subdomains: ['a', 'b', 'c'],
+    maxNativeZoom: 19,
+    attribution: '&copy; OpenStreetMap contributors',
+    bust: false
+  }
+};
+// Fallback order: Google -> Esri -> OpenStreetMap
+const FALLBACK_ORDER = ['google', 'esri', 'street'];
+const MAP_MAX_ZOOM = 20;
+const baseLayers = {};
+FALLBACK_ORDER.forEach(key => {
+  const p = PROVIDERS[key];
+  baseLayers[key] = L.tileLayer(p.url, {
+    maxZoom: MAP_MAX_ZOOM,
+    maxNativeZoom: p.maxNativeZoom,
+    subdomains: p.subdomains,
+    attribution: p.attribution
+  });
 });
-
-const esriLayer = L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}', {
-  maxZoom: 19,
-  attribution: 'Tiles &copy; Esri, Maxar, Earthstar Geographics'
-});
-
-const googleLayer = L.tileLayer('https://{s}.google.com/vt/lyrs=s&x={x}&y={y}&z={z}', {
-  maxZoom: 20,
-  subdomains: ['mt0', 'mt1', 'mt2', 'mt3'],
-  attribution: 'Imagery &copy; Google'
-}).addTo(map); // default layer
+// NOTE: no layer is added here; the first basemap (Google) is added by
+// setBaseLayer(userKey) in the layer-switcher section further down.
 
 // All clusters look identical (plain dot, no count), so build the icon
 // once and hand back the same instance every time instead of allocating a
@@ -1561,8 +1600,179 @@ function showCoordResult(lat, lng) {
 // ---- Layer switcher (Google Satellite / Esri Satellite / Street) ----
 const layerBtn = document.getElementById('layerBtn');
 const layerMenu = document.getElementById('layerMenu');
-const baseLayers = { google: googleLayer, esri: esriLayer, street: streetLayer };
-let activeBaseLayer = googleLayer;
+let activeBaseLayer = null;
+let activeKey = null;
+let userKey = 'google'; // the basemap the user wants (default, or last manual choice)
+
+// ---- Automatic basemap fallback ---------------------------------------
+// How it decides (so it does not switch by mistake):
+//  1. Tile successes/errors of the ACTIVE basemap are tracked in a sliding
+//     time window (not "N errors in a row"), so partial blocking / rate
+//     limiting (some tiles load, many fail) is detected too.
+//  2. When the error rate looks bad, a small probe tile (zoom <= 10, at the
+//     map centre) is requested from the active provider AND from the
+//     providers after it, in parallel.
+//       - Active probe OK: Esri at zoom >= GAP_ZOOM -> just missing imagery
+//         (rural 404s), no switch. Any other case needs a very high error
+//         rate (DEGRADED_*) = partial blocking / rate limiting -> switch.
+//       - Nothing reachable at all           -> device/network problem. No switch.
+//       - Active dead (or badly degraded) and a fallback is alive -> switch.
+//  3. While running on a fallback, the preferred provider is re-tested every
+//     RECOVERY_INTERVAL_MS (and right when the device comes back online), at
+//     the zoom level the user is currently on, and the map goes back to it
+//     as soon as it works there.
+const WINDOW_MS = 15000;           // sliding window for tile statistics
+const ERR_MIN = 5;                 // min errors in window before verifying
+const ERR_RATIO = 0.5;             // ...and at least this share of tiles failing
+const DEGRADED_ERR_MIN = 8;        // stricter limit if the probe tile still loads
+const DEGRADED_RATIO = 0.7;
+const GAP_ZOOM = 17;               // from here, Esri errors are treated as "no imagery"
+const CHECK_COOLDOWN_MS = 15000;   // min time between two verifications
+const PROBE_TIMEOUT_MS = 5000;
+const RECOVERY_INTERVAL_MS = 10 * 60 * 1000; // try to return to the preferred one
+
+const tileEvents = [];             // { t, ok } for the active basemap
+let checking = false;
+let lastCheckAt = 0;
+
+// -- probe: load ONE small tile from a provider and report if it is valid --
+function probeTile(key, lat, lng, z) {
+  const p = PROVIDERS[key];
+  const n = Math.pow(2, z);
+  const x = Math.floor((lng + 180) / 360 * n);
+  const latR = lat * Math.PI / 180;
+  const y = Math.floor((1 - Math.log(Math.tan(latR) + 1 / Math.cos(latR)) / Math.PI) / 2 * n);
+  let url = p.url.replace('{s}', p.subdomains[0])
+                 .replace('{x}', x).replace('{y}', y).replace('{z}', z);
+  if (p.bust) url += (url.indexOf('?') >= 0 ? '&' : '?') + '_probe=' + Date.now(); // bypass browser cache
+  return new Promise(resolve => {
+    const img = new Image();
+    let done = false;
+    let timer = null;
+    const finish = ok => {
+      if (done) return;
+      done = true;
+      clearTimeout(timer);
+      img.onload = img.onerror = null;
+      resolve(ok);
+    };
+    timer = setTimeout(() => finish(false), PROBE_TIMEOUT_MS);
+    // a real tile is 256x256; anything else (error page, placeholder) = not OK
+    img.onload = () => finish(img.naturalWidth === 256 && img.naturalHeight === 256);
+    img.onerror = () => finish(false);
+    img.src = url;
+  });
+}
+
+function probeCenter() {
+  const c = map.getCenter().wrap();
+  return { lat: c.lat, lng: c.lng, z: Math.max(2, Math.min(10, Math.round(map.getZoom()))) };
+}
+
+function setBaseLayer(key) {
+  const newLayer = baseLayers[key];
+  if (!newLayer || newLayer === activeBaseLayer) return;
+  if (activeBaseLayer) map.removeLayer(activeBaseLayer);
+  map.addLayer(newLayer);
+  activeBaseLayer = newLayer;
+  activeKey = key;
+  tileEvents.length = 0;
+  lastCheckAt = 0; // new basemap: it may fail over right away, no cooldown
+  layerMenu.querySelectorAll('div[data-layer]').forEach(d => {
+    d.classList.toggle('selected', d.getAttribute('data-layer') === key);
+  });
+}
+
+function currentStats() {
+  const now = Date.now();
+  while (tileEvents.length && now - tileEvents[0].t > WINDOW_MS) tileEvents.shift();
+  let err = 0;
+  for (const e of tileEvents) if (!e.ok) err++;
+  return { err: err, total: tileEvents.length };
+}
+
+function recordTile(ok) {
+  tileEvents.push({ t: Date.now(), ok: ok });
+  return ok ? null : currentStats();
+}
+
+async function verifyAndMaybeSwitch() {
+  if (checking) return;
+  checking = true;
+  lastCheckAt = Date.now();
+  try {
+    if (navigator.onLine === false) return;
+    const failing = activeKey;
+    const rest = FALLBACK_ORDER.slice(FALLBACK_ORDER.indexOf(failing) + 1);
+    if (!rest.length) return;                       // already on the last fallback
+    const pc = probeCenter();
+    const results = await Promise.all([failing].concat(rest).map(k => probeTile(k, pc.lat, pc.lng, pc.z)));
+    if (activeKey !== failing) return;              // user changed basemap meanwhile
+    const activeOk = results[0];
+    if (activeOk) {
+      // Provider answers the small probe. Either imagery is just missing at high
+      // zoom (only possible for gap-prone providers such as Esri), or it is
+      // partially blocked / rate limited at the zoom the user is really using.
+      if (PROVIDERS[failing].gapProne && map.getZoom() >= GAP_ZOOM) return;
+      const now = currentStats();                   // fresh numbers: more tiles arrived during the probe
+      if (now.err < DEGRADED_ERR_MIN || now.err / now.total < DEGRADED_RATIO) return;
+    }
+    const idx = results.slice(1).indexOf(true);
+    if (idx < 0) return;                            // nothing reachable: network problem, keep as is
+    const next = rest[idx];
+    setBaseLayer(next);
+    showToast(PROVIDERS[failing].label + ' unavailable - switched to ' + PROVIDERS[next].label);
+  } finally {
+    checking = false;
+  }
+}
+
+Object.keys(baseLayers).forEach(key => {
+  const layer = baseLayers[key];
+  layer.on('tileload', () => {
+    if (key !== activeKey) return;                  // ignore late events from a removed layer
+    recordTile(true);
+  });
+  layer.on('tileerror', () => {
+    if (key !== activeKey) return;
+    const st = recordTile(false);
+    if (!st || checking) return;
+    if (Date.now() - lastCheckAt < CHECK_COOLDOWN_MS) return;
+    if (st.err >= ERR_MIN && st.err / st.total >= ERR_RATIO) verifyAndMaybeSwitch();
+  });
+});
+
+// Go back to the preferred basemap when running on a fallback and it works again.
+// The probe uses the zoom level the user is on now (capped to what the provider
+// has), so the map never returns to a provider that still fails at that zoom.
+async function tryRecoverPreferred() {
+  if (checking || document.hidden || navigator.onLine === false) return;
+  const i = FALLBACK_ORDER.indexOf(userKey);
+  const j = FALLBACK_ORDER.indexOf(activeKey);
+  if (i < 0 || j < 0 || i >= j) return;             // already on the preferred one
+  checking = true;
+  try {
+    const cands = FALLBACK_ORDER.slice(i, j);       // preferred ... just before the active one
+    const c = map.getCenter().wrap();
+    const zNow = Math.max(2, Math.round(map.getZoom()));
+    const res = await Promise.all(cands.map(k =>
+      probeTile(k, c.lat, c.lng, Math.min(zNow, PROVIDERS[k].maxNativeZoom))));
+    if (activeKey !== FALLBACK_ORDER[j]) return;    // user changed basemap meanwhile
+    const idx = res.indexOf(true);
+    if (idx < 0) return;
+    const back = cands[idx];
+    setBaseLayer(back);
+    showToast(PROVIDERS[back].label + ' is available again');
+  } finally {
+    checking = false;
+  }
+}
+setInterval(tryRecoverPreferred, RECOVERY_INTERVAL_MS);
+window.addEventListener('online', tryRecoverPreferred);
+
+// Startup: always begin with the preferred basemap (nothing is remembered between
+// visits, so a short network glitch can never keep Google disabled afterwards).
+setBaseLayer(userKey);
 
 layerBtn.addEventListener('click', (e) => {
   e.stopPropagation();
@@ -1572,17 +1782,11 @@ layerBtn.addEventListener('click', (e) => {
 layerMenu.addEventListener('click', (e) => {
   const el = e.target.closest('div[data-layer]');
   if (!el) return;
-  const choice = el.getAttribute('data-layer');
-  const newLayer = baseLayers[choice];
-  if (!newLayer || newLayer === activeBaseLayer) { layerMenu.classList.remove('open'); return; }
-
-  layerMenu.querySelectorAll('div').forEach(d => d.classList.remove('selected'));
-  el.classList.add('selected');
-
-  map.removeLayer(activeBaseLayer);
-  map.addLayer(newLayer);
-  activeBaseLayer = newLayer;
-
+  const key = el.getAttribute('data-layer');
+  if (baseLayers[key]) {
+    userKey = key;                // manual choice becomes the preferred basemap
+    setBaseLayer(key);
+  }
   layerMenu.classList.remove('open');
 });
 
@@ -1617,14 +1821,35 @@ function getDeviceId() {
   }
 }
 
-function logVisitOnce(lat, lng) {
+// Accuracy required before sending, relaxed in steps as time passes
+// (time counted from page load). A fix is sent as soon as its accuracy
+// is within the limit of the current step.
+const ACCURACY_STEPS = [
+  { until: 5000,  max: 20  },   //  0-5 s  : error under 20 m
+  { until: 10000, max: 50  },   //  5-10 s : error under 50 m
+  { until: 15000, max: 100 }    // 10-15 s : error under 100 m
+];
+const MAX_WAIT_MS = 15000;      // after this, no coordinates are sent
+const logStart = Date.now();
+let bestFix = null;
+
+function allowedAccuracy() {
+  const t = Date.now() - logStart;
+  for (const step of ACCURACY_STEPS) {
+    if (t < step.until) return step.max;
+  }
+  return 0; // past the last step: nothing qualifies
+}
+
+function logVisitOnce(lat, lng, accuracy) {
   if (visitLogged || VISIT_LOG_URL.indexOf('PASTE_') === 0) return;
   visitLogged = true;
   const hasLoc = isFinite(lat) && isFinite(lng);
   const body = JSON.stringify({
     id: getDeviceId(),
     lat: hasLoc ? Number(lat.toFixed(6)) : '',
-    lng: hasLoc ? Number(lng.toFixed(6)) : ''
+    lng: hasLoc ? Number(lng.toFixed(6)) : '',
+    accuracy: hasLoc && isFinite(accuracy) ? Math.round(accuracy) : ''
   });
   try {
     // text/plain + no-cors = no preflight, works from any static site.
@@ -1632,8 +1857,37 @@ function logVisitOnce(lat, lng) {
       headers: { 'Content-Type': 'text/plain;charset=utf-8' }, body: body }).catch(() => {});
   } catch (e) {}
 }
-// If no location arrives (permission denied / no GPS), still count the device.
-setTimeout(() => logVisitOnce(NaN, NaN), 60000);
+
+// Send the best fix so far if it meets the limit of the current time step.
+function checkAndLog() {
+  if (visitLogged || !bestFix) return;
+  if (bestFix.accuracy <= allowedAccuracy()) {
+    logVisitOnce(bestFix.lat, bestFix.lng, bestFix.accuracy);
+  }
+}
+
+// Called on every location fix: keep the most accurate one, then check it.
+function considerForLog(pos) {
+  if (visitLogged) return;
+  const c = pos.coords;
+  if (!bestFix || c.accuracy < bestFix.accuracy) {
+    bestFix = { lat: c.latitude, lng: c.longitude, accuracy: c.accuracy };
+  }
+  checkAndLog();
+}
+
+// Re-check twice a second, because the limit loosens over time even when no
+// new fix arrives. After MAX_WAIT_MS with nothing accurate enough, only the
+// device ID is logged (empty lat/lng) so the visit is still counted.
+const logTimer = setInterval(() => {
+  if (visitLogged) { clearInterval(logTimer); return; }
+  if (Date.now() - logStart >= MAX_WAIT_MS) {
+    clearInterval(logTimer);
+    logVisitOnce(NaN, NaN);
+    return;
+  }
+  checkAndLog();
+}, 500);
 
 // ---- Locate me ----
 const locateBtn = document.getElementById('locateBtn');
@@ -1654,11 +1908,23 @@ function updateUserMarker(lat, lng) {
   lastFixTime = Date.now();
 }
 
+// ---- Live GPS accuracy (error margin, meters), refreshed every second ----
+let lastAccuracy = null;
+const gpsAccuracyEl = document.getElementById('gpsAccuracy');
+function renderAccuracy() {
+  gpsAccuracyEl.textContent = (lastAccuracy === null)
+    ? 'GPS ± -- m'
+    : 'GPS ± ' + Math.round(lastAccuracy) + ' m';
+}
+setInterval(renderAccuracy, 1000);
+
 function onLocationFound(pos, recenter) {
   const lat = pos.coords.latitude;
   const lng = pos.coords.longitude;
+  lastAccuracy = pos.coords.accuracy;
+  renderAccuracy();
   updateUserMarker(lat, lng);
-  logVisitOnce(lat, lng);
+  considerForLog(pos);
   if (recenter) map.setView([lat, lng], 17, { animate: true });
   locateBtn.classList.remove('active');
 }
