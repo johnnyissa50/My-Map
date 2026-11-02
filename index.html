@@ -956,10 +956,10 @@ function activePoints() {
 // Usage mode colors, by Installed ONTs count.
 const USAGE_COLORS = ['#00FF00','#55DD55','#99BB99','#808080','#808080','#808080','#808080','#808080','#808080','#808080','#808080','#808080','#808080','#808080','#AA8080','#D55555','#FF0000'];
 function usageColor(ontStr) {
-  // Only whole numbers 0..16 get a shade; anything else (empty, text, N/A, 17+) is white.
-  if (!/^\d+$/.test(ontStr)) return '#FFFFFF';
+  // Only whole numbers 0..16 get their own shade; anything else (empty, text, N/A, 17+) is green.
+  if (!/^\d+$/.test(ontStr)) return '#00FF00';
   const n = Number(ontStr);
-  return n <= 16 ? USAGE_COLORS[n] : '#FFFFFF';
+  return n <= 16 ? USAGE_COLORS[n] : '#00FF00';
 }
 // Color a point should currently be drawn with.
 function pointColor(p) { return usageOn ? p.uc : p.c; }
