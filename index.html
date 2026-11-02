@@ -220,7 +220,7 @@
   /* Floating button, bottom-right corner (outside the top bar) */
   #bottomBtns {
     position:fixed; right:8px; bottom:calc(8px + env(safe-area-inset-bottom, 0px)); z-index:1100;
-    display:flex; flex-direction:row; gap:8px;
+    display:flex; gap:8px; align-items:center;
   }
   #filterBtn, #usageBtn {
     height:40px; padding:0 12px; border-radius:8px; border:2px solid transparent;
@@ -271,7 +271,7 @@
 <div id="map"></div>
 <div id="filterFrame"></div>
 <div id="bottomBtns">
-  <button id="usageBtn" title="Color FATs by Installed ONTs (0 = white ... 16 = black)">Usage</button>
+  <button id="usageBtn" title="Color points by Installed ONTs">Usage</button>
   <button id="filterBtn" title="Show only FATs with 0 installed ONTs">Filter 0 User</button>
 </div>
 <div id="toast"></div>
@@ -945,7 +945,7 @@ const LABEL_ZOOM = 18; // permanent name labels appear from this zoom
 let allPoints = [];
 let pointByName = {};
 let allClusterMarkers = [];
-let usageOn = false;  // "Usage": color dots white->black by Installed ONTs (0..16)
+let usageOn = false;  // "Usage": color points by Installed ONTs count
 let filterOn = false; // "Filter 0 User": show only FATs whose Installed ONTs is 0
 
 // Points currently allowed to be shown (all, or only the zero-ONT ones).
@@ -953,20 +953,20 @@ function activePoints() {
   return filterOn ? allPoints.filter(p => p.zero) : allPoints;
 }
 
-// Usage color: 0 ONTs = white, 16 = black, 1..15 = 15 evenly spaced grays
-// (8 = middle gray) -> 17 shades in total. Unknown/non-numeric values are
-// treated as 0 (white).
-const USAGE_MAX = 16;
-function usageColor(p) {
-  // Non-numeric / missing values are treated as 0 (white).
-  const num = Number(p.ont);
-  const n = (p.ont === 'Unknown' || p.ont === '' || isNaN(num))
-    ? 0 : Math.max(0, Math.min(USAGE_MAX, Math.round(num)));
-  const v = Math.round(255 * (1 - n / USAGE_MAX));
-  const h = v.toString(16).padStart(2, '0');
-  return '#' + h + h + h;
+// Usage mode colors, by Installed ONTs count.
+function usageColor(ontStr) {
+  if (ontStr === '' || isNaN(Number(ontStr))) return DEFAULT_POINT_COLOR; // unknown / N/A
+  const n = Number(ontStr);
+  if (n >= 16) return '#D73027';
+  if (n === 15) return '#FC8D59';
+  if (n === 14) return '#FFDD44';
+  if (n >= 3)  return '#E0E0E0'; // 3..13
+  if (n === 2) return '#80CDC1';
+  if (n === 1) return '#35978F';
+  return '#01665E';              // 0
 }
-function dotColor(p) { return usageOn ? usageColor(p) : p.c; }
+// Color a point should currently be drawn with.
+function pointColor(p) { return usageOn ? p.uc : p.c; }
 
 // Partner -> dot color. Anything not listed here (missing, "#N/A", or spelled
 // differently) falls back to gray. Exact match after trimming whitespace.
@@ -990,16 +990,14 @@ const PARTNER_COLORS = new Map([
 // and shared by every marker of that color - no per-marker icon allocation.
 const pointIconCache = new Map();
 function getPointIcon(color) {
-  // In Usage mode the dot's border takes the dot's own color (cached per mode+color).
-  const key = (usageOn ? 'u' : 'n') + color;
-  let icon = pointIconCache.get(key);
+  let icon = pointIconCache.get(color);
   if (!icon) {
     icon = L.divIcon({
       className: 'fat-icon',
-      html: '<div class="point-hit-area"><div class="point-dot" style="background:' + color + (usageOn ? ';border-color:' + color : '') + '"></div></div>',
+      html: '<div class="point-hit-area"><div class="point-dot" style="background:' + color + '"></div></div>',
       iconSize: [27, 27]
     });
-    pointIconCache.set(key, icon);
+    pointIconCache.set(color, icon);
   }
   return icon;
 }
@@ -1070,8 +1068,8 @@ function makeCircleMarker(p, withLabel) {
     renderer: canvasRenderer,
     radius: 7,
     weight: 2,
-    color: usageOn ? dotColor(p) : '#ffffff',
-    fillColor: dotColor(p),
+    color: '#ffffff',
+    fillColor: pointColor(p),
     fillOpacity: 1
   });
   c.bindPopup(popupContent(p));
@@ -1169,7 +1167,8 @@ fetch('data.csv')
       data.push({
         n: name, search: name.toUpperCase(), lat: lat, lng: lng, c: color,
         pt: partner || 'Unknown', ont: ont || 'Unknown',
-        zero: ont !== '' && Number(ont) === 0
+        zero: ont !== '' && Number(ont) === 0,
+        uc: usageColor(ont)
       });
     });
 
@@ -1181,7 +1180,7 @@ fetch('data.csv')
       pointByName[p.n] = p;
 
       // Regular marker, used while clustered (zoom < DENSE_ZOOM)
-      const m = L.marker([p.lat, p.lng], { icon: getPointIcon(dotColor(p)) });
+      const m = L.marker([p.lat, p.lng], { icon: getPointIcon(pointColor(p)) });
       m.bindPopup(popupContent(p));
       m._p = p;
       clusterMarkers.push(m);
@@ -1249,31 +1248,10 @@ map.on('moveend', () => {
 const filterBtn = document.getElementById('filterBtn');
 const themeMeta = document.getElementById('themeColorMeta');
 
-const usageBtn = document.getElementById('usageBtn');
-
-function applyTheme() {
-  const red = filterOn || usageOn;
-  document.documentElement.classList.toggle('filter-on', red);
-  filterBtn.classList.toggle('active', filterOn);
-  usageBtn.classList.toggle('active', usageOn);
-  if (themeMeta) themeMeta.setAttribute('content', red ? '#d50000' : '#4a4a4a');
-}
-
-function applyUsage() {
-  applyTheme();
-  // Recolor clustered-view markers (they are not on the map while zoomed in)
-  allClusterMarkers.forEach(m => m.setIcon(getPointIcon(dotColor(m._p))));
-  // Recolor dense (high zoom) view
-  if (denseMode) rebuildDenseLayer();
-}
-
-usageBtn.addEventListener('click', () => {
-  usageOn = !usageOn;
-  applyUsage();
-});
-
 function applyFilter() {
-  applyTheme();
+  document.documentElement.classList.toggle('filter-on', filterOn);
+  filterBtn.classList.toggle('active', filterOn);
+  if (themeMeta) themeMeta.setAttribute('content', filterOn ? '#d50000' : '#4a4a4a');
 
   // Clustered view (low zoom)
   clusterGroup.clearLayers();
@@ -1287,6 +1265,21 @@ function applyFilter() {
 filterBtn.addEventListener('click', () => {
   filterOn = !filterOn;
   applyFilter();
+});
+
+// ---- Usage toggle ----
+const usageBtn = document.getElementById('usageBtn');
+function applyUsage() {
+  usageBtn.classList.toggle('active', usageOn);
+  allClusterMarkers.forEach(m => m.setIcon(getPointIcon(pointColor(m._p))));
+  // Re-add so the clustered view picks up the new icons
+  clusterGroup.clearLayers();
+  clusterGroup.addLayers(filterOn ? allClusterMarkers.filter(m => m._p.zero) : allClusterMarkers);
+  if (denseMode) rebuildDenseLayer();
+}
+usageBtn.addEventListener('click', () => {
+  usageOn = !usageOn;
+  applyUsage();
 });
 
 const input = document.getElementById('searchInput');
