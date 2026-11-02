@@ -1244,10 +1244,16 @@ map.on('moveend', () => {
 const filterBtn = document.getElementById('filterBtn');
 const themeMeta = document.getElementById('themeColorMeta');
 
+// Red theme + red frame while either Filter 0 User or Usage is on.
+function applyRedTheme() {
+  const red = filterOn || usageOn;
+  document.documentElement.classList.toggle('filter-on', red);
+  if (themeMeta) themeMeta.setAttribute('content', red ? '#d50000' : '#4a4a4a');
+}
+
 function applyFilter() {
-  document.documentElement.classList.toggle('filter-on', filterOn);
+  applyRedTheme();
   filterBtn.classList.toggle('active', filterOn);
-  if (themeMeta) themeMeta.setAttribute('content', filterOn ? '#d50000' : '#4a4a4a');
 
   // Clustered view (low zoom)
   clusterGroup.clearLayers();
@@ -1266,6 +1272,7 @@ filterBtn.addEventListener('click', () => {
 // ---- Usage toggle ----
 const usageBtn = document.getElementById('usageBtn');
 function applyUsage() {
+  applyRedTheme();
   usageBtn.classList.toggle('active', usageOn);
   allClusterMarkers.forEach(m => m.setIcon(getPointIcon(pointColor(m._p))));
   // Re-add so the clustered view picks up the new icons
