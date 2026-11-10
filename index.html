@@ -283,7 +283,59 @@
 <script src="https://unpkg.com/leaflet-rotate@0.2.8/dist/leaflet-rotate-src.js"></script>
 <script src="https://unpkg.com/leaflet.markercluster@1.5.3/dist/leaflet.markercluster.js"></script>
 <script src="https://unpkg.com/papaparse@5.4.1/papaparse.min.js"></script>
-<script src="https://unpkg.com/leaflet-doubletapdrag@0.1.2"></script>
+<!-- leaflet-doubletapdrag@0.1.2, inlined so DOUBLE_CLICK_TIMEOUT can be changed (500 -> 200) -->
+<script>
+function DoubleTapDragInitHook() {
+  var timer = null;
+  var fired = false;
+  var lastTimestamp = null;
+  var DOUBLE_CLICK_TIMEOUT = 200; // ms, measured from the FIRST touchstart to the SECOND touchstart (was 500)
+  var WAIT_FOR_DRAG_END_TIMEOUT = 100;
+
+  this._container.addEventListener('touchstart', L.Util.bind(function (e) {
+    if (e.touches.length !== 1) {
+      return;
+    }
+    var now = Date.now();
+    if (lastTimestamp) {
+      if (now - lastTimestamp < DOUBLE_CLICK_TIMEOUT) {
+        timer = setTimeout(L.Util.bind(function () {
+          this.fire('doubletapdragstart', e);
+          timer = null;
+          fired = true;
+        }, this), WAIT_FOR_DRAG_END_TIMEOUT);
+      }
+      lastTimestamp = null;
+    } else {
+      lastTimestamp = Date.now();
+      setTimeout(L.Util.bind(function () {
+        lastTimestamp = null;
+      }, this), DOUBLE_CLICK_TIMEOUT);
+    }
+  }, this));
+
+  this._container.addEventListener('touchend', L.Util.bind(function (e) {
+    if (timer) {
+      clearTimeout(timer);
+      timer = null;
+    }
+    if (fired) {
+      this.fire('doubletapdragend', e);
+      fired = null;
+    }
+  }, this));
+
+  this._container.addEventListener('touchmove', L.Util.bind(function (e) {
+    if (!fired) {
+      return;
+    }
+
+    this.fire('doubletapdrag', e);
+  }, this));
+}
+
+L.Map.addInitHook(DoubleTapDragInitHook);
+</script>
 <script src="https://unpkg.com/leaflet-doubletapdragzoom@0.3.2"></script>
 <script>
 const map = L.map('map', {
@@ -2053,7 +2105,7 @@ setInterval(() => {
     const now = Date.now();
     const timeSinceLastTap = now - lastTapTime;
 
-    if (timeSinceLastTap > 0 && timeSinceLastTap < 300) {
+    if (timeSinceLastTap > 0 && timeSinceLastTap < 200) {
       const touch = e.changedTouches[0];
       const rect = container.getBoundingClientRect();
       const point = L.point(touch.clientX - rect.left, touch.clientY - rect.top);
