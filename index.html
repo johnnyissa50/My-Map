@@ -283,13 +283,13 @@
 <script src="https://unpkg.com/leaflet-rotate@0.2.8/dist/leaflet-rotate-src.js"></script>
 <script src="https://unpkg.com/leaflet.markercluster@1.5.3/dist/leaflet.markercluster.js"></script>
 <script src="https://unpkg.com/papaparse@5.4.1/papaparse.min.js"></script>
-<!-- leaflet-doubletapdrag@0.1.2, inlined so DOUBLE_CLICK_TIMEOUT can be changed (500 -> 200) -->
+<!-- leaflet-doubletapdrag@0.1.2, inlined so DOUBLE_CLICK_TIMEOUT can be changed (500 -> 220) -->
 <script>
 function DoubleTapDragInitHook() {
   var timer = null;
   var fired = false;
   var lastTimestamp = null;
-  var DOUBLE_CLICK_TIMEOUT = 200; // ms, measured from the FIRST touchstart to the SECOND touchstart (was 500)
+  var DOUBLE_CLICK_TIMEOUT = 220; // ms, measured from the FIRST touchstart to the SECOND touchstart (was 500, then 200)
   var WAIT_FOR_DRAG_END_TIMEOUT = 100;
 
   this._container.addEventListener('touchstart', L.Util.bind(function (e) {
@@ -1053,6 +1053,7 @@ function getPointIcon(color) {
 function popupContent(p) {
   return '<b>' + p.n + '</b> &nbsp;<a href="#" class="copy-text" data-copy="' + p.n + '" data-label="Copy">Copy</a><br>' +
     'Partner : ' + p.pt + '<br>' +
+    'Area : ' + p.area + '<br>' +
     'Installed ONTs : ' + p.ont + '<br>' +
     '<a href="https://www.google.com/maps?q=' + p.lat + ',' + p.lng + '" target="_blank">Open in Google Maps</a>';
 }
@@ -1212,9 +1213,10 @@ fetch('data.csv')
       const partner = (row.Partner || '').trim();
       const color = PARTNER_COLORS.get(partner) || DEFAULT_POINT_COLOR;
       const ont = (row['Installed ONTs'] || '').trim();
+      const area = (row.Area || '').trim().replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
       data.push({
         n: name, search: name.toUpperCase(), lat: lat, lng: lng, c: color,
-        pt: partner || 'Unknown', ont: ont || 'Unknown',
+        pt: partner || 'Unknown', area: area || 'Unknown', ont: ont || 'Unknown',
         zero: ont !== '' && Number(ont) === 0,
         uc: usageColor(ont)
       });
@@ -2105,7 +2107,7 @@ setInterval(() => {
     const now = Date.now();
     const timeSinceLastTap = now - lastTapTime;
 
-    if (timeSinceLastTap > 0 && timeSinceLastTap < 200) {
+    if (timeSinceLastTap > 0 && timeSinceLastTap < 250) {
       const touch = e.changedTouches[0];
       const rect = container.getBoundingClientRect();
       const point = L.point(touch.clientX - rect.left, touch.clientY - rect.top);
