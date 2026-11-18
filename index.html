@@ -3,81 +3,56 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, viewport-fit=cover">
-<!-- Colors the browser UI strip above/below the page (status bar / bottom bar)
-     instead of leaving it default white/red — now a neutral gray. -->
 <meta name="theme-color" content="#4a4a4a" id="themeColorMeta">
-<!-- If the page is ever added to the Home Screen, these make it launch as a
-     standalone app with a translucent status bar, so the page's own gray
-     background shows through behind the notch instead of the OS drawing a
-     plain bar there. -->
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <title>FAT Map</title>
-<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
-<link rel="stylesheet" href="https://unpkg.com/leaflet.markercluster@1.5.3/dist/MarkerCluster.css" />
-<!-- MarkerCluster.Default.css intentionally omitted: iconCreateFunction below
-     fully replaces the default cluster icon, so its styles are never used. -->
-<!-- Warm up DNS + TLS to the tile servers before the first actual tile
-     request is made, so the first frames of the basemap load faster. -->
+<!-- MapLibre GL JS (WebGL renderer). Version pinned so an update can never
+     change behaviour unexpectedly. -->
+<link rel="stylesheet" href="https://unpkg.com/maplibre-gl@6.19.0/dist/maplibre-gl.css" />
+<link rel="preconnect" href="https://unpkg.com">
 <link rel="preconnect" href="https://mt0.google.com">
 <link rel="preconnect" href="https://server.arcgisonline.com">
 <link rel="preconnect" href="https://tile.openstreetmap.org">
 <style>
   html, body {
     margin:0; padding:0; font-family: 'Segoe UI', Tahoma, sans-serif;
-    background:#4a4a4a; /* shows behind the red header in the safe-area strip (notch) */
-    height:100%;    /* fallback for browsers without dvh support */
-    height:100dvh;  /* tracks Safari's real visible viewport as its toolbar shows/hides */
+    background:#4a4a4a;
+    height:100%;
+    height:100dvh;
+    overflow:hidden;
   }
-  /* Map starts right below the header row; the header itself is pushed down
-     by the top safe-area inset (see #topbar), so this stays in sync with it
-     instead of hardcoding an extra offset here. */
-  #map { position:absolute; top:calc(64px + env(safe-area-inset-top, 0px)); bottom:0; left:0; right:0; }
-  /* Prevent iOS's native long-press image callout / blue selection
-     highlight from appearing during the double-tap-hold-drag zoom
-     gesture (it treats the map tiles as regular <img> elements). */
+  #map { position:absolute; top:calc(64px + env(safe-area-inset-top, 0px)); bottom:0; left:0; right:0; background:#1b1b1b; }
   #map, #map * {
     -webkit-touch-callout: none;
     -webkit-user-select: none;
     user-select: none;
     -webkit-tap-highlight-color: transparent;
-    /* Tells the browser/OS not to handle this element's touch gestures
-       itself at all (panning, long-press, etc.) and leave the whole touch
-       sequence to our own JS - -webkit-touch-callout alone isn't always
-       honored by Safari for <img> elements (the map tiles), which is the
-       likely reason a motionless hold on iPhone could be intercepted before
-       our long-press timer ever got to finish. */
-    touch-action: none;
   }
-  /* Popups are the exception: allow selecting/copying the FAT code with
-     mouse drag / double-click on desktop and long-press on mobile. The
-     higher specificity (#map + class) beats the rule above. */
-  #map .leaflet-popup-content,
-  #map .leaflet-popup-content * {
+  #map .maplibregl-popup-content,
+  #map .maplibregl-popup-content * {
     -webkit-touch-callout: default;
     -webkit-user-select: text;
     user-select: text;
     cursor: text;
   }
-  #map .leaflet-popup-content a { cursor: pointer; }
+  #map .maplibregl-popup-content a { cursor: pointer; }
+  .maplibregl-popup-content { font-size:14px; line-height:1.45; padding:12px 26px 12px 14px; border-radius:10px; box-shadow:0 3px 14px rgba(0,0,0,.4); }
+  .maplibregl-popup-close-button { font-size:20px; width:26px; height:26px; }
+  .maplibregl-popup-content a { color:#0078A8; text-decoration:none; }
+
   #topbar {
-    /* Sits right below the safe-area strip so the same gray extends
-       continuously from the notch through the header — height stays a
-       plain fixed 64px like before. */
     position:absolute; top:env(safe-area-inset-top, 0px); left:0; right:0;
     height:64px; z-index:1000;
     background:#4a4a4a; color:#fff; display:flex; align-items:center; gap:10px;
-    padding:0 12px; box-shadow:0 2px 6px rgba(0,0,0,.25);
+    padding:0 12px; box-shadow:0 2px 6px rgba(0,0,0,.25); box-sizing:border-box;
   }
-  #topbar h1 { font-size:15px; margin:0; white-space:nowrap; font-weight:600;}
   #searchBox { flex:1; position:relative; }
   #searchInput {
     width:100%; box-sizing:border-box; padding:10px 34px 10px 12px; border-radius:8px; border:none;
     font-size:15px; outline:none;
   }
   #searchInput::placeholder { color:#999; }
-  /* Circle-with-X "clear" button, right inside the search box, shown only
-     once there is something typed to clear. */
   #clearSearchBtn {
     position:absolute; top:50%; right:6px; transform:translateY(-50%);
     width:26px; height:26px; border:none; background:transparent; padding:0;
@@ -85,19 +60,14 @@
   }
   #clearSearchBtn.visible { display:flex; }
   #clearSearchBtn svg { width:20px; height:20px; }
-  #clearSearchBtn:active svg circle { stroke:#333; }
-  #clearSearchBtn:active svg line { stroke:#333; }
   #suggestions {
     position:absolute; top:44px; left:0; right:0; background:#fff; border-radius:8px;
     max-height:140px; overflow-y:auto; box-shadow:0 4px 14px rgba(0,0,0,.3); display:none; z-index:1001;
   }
   #suggestions div { padding:10px 12px; color:#222; cursor:pointer; border-bottom:1px solid #eee; font-size:14px; }
   #suggestions div:hover { background:#f2f2f2; }
-  .leaflet-popup-content { font-size:14px; }
 
-  #layerBtn { flex:none; }
   #layerWrap { position:relative; flex:none; }
-
   #locateBtn, #layerBtn {
     width:40px; height:40px; flex:none; border-radius:8px; border:none;
     background:#fff; cursor:pointer;
@@ -108,7 +78,6 @@
   #locateBtn:active, #layerBtn:active { background:#eee; }
   #locateBtn.active { background:#1a73e8; }
   #locateBtn.active svg { fill:#fff; }
-
   #layerMenu {
     position:absolute; top:48px; right:0; background:#fff; border-radius:8px;
     box-shadow:0 4px 14px rgba(0,0,0,.3); display:none; z-index:1001; overflow:hidden; min-width:180px;
@@ -118,106 +87,49 @@
   #layerMenu div:hover { background:#f2f2f2; }
   #layerMenu div.selected { font-weight:700; color:#1a73e8; }
 
+  /* DOM markers (only a handful exist: you, the searched coordinate, measure points).
+     The 100k FAT points are NOT DOM elements - they are drawn by WebGL. */
   .user-dot {
     width:16px; height:16px; border-radius:50%; background:#000;
-    border:3px solid #fff; box-shadow:0 0 0 2px rgba(0,0,0,.4);
+    border:3px solid #fff; box-shadow:0 0 0 2px rgba(0,0,0,.4); box-sizing:border-box;
   }
-  .cluster-dot {
-    width:24px; height:24px; border-radius:50%; background:#808080;
-    border:3px solid #fff; box-shadow:0 1px 4px rgba(0,0,0,.4);
-  }
-  .point-dot {
-    width:14px; height:14px; border-radius:50%; background:#2A81CB;
-    border:2px solid #fff; box-shadow:0 1px 3px rgba(0,0,0,.4);
-  }
-  /* Invisible padding around the visible dot: the marker's clickable box
-     (set via iconSize/pointIconAnchor below) is bigger than the dot itself,
-     and this centers the dot inside it without changing how it looks. */
-  .point-hit-area {
-    width:27px; height:27px; display:flex; align-items:center; justify-content:center;
-  }
-
-  /* Permanent name labels (only created in JS from zoom 18+) */
-  .point-label {
-    background: transparent;
-    border: none;
-    box-shadow: none;
-    padding: 0 0 0 4px;
-    margin: 0;
-    font-size: 11px;
-    font-weight: 700;
-    color: #000;
-    /* Solid (non-blurred) white outline: 8 hard-edged shadows around the
-       text, so it stays readable over any satellite imagery. */
-    text-shadow:
-      -1.5px -1.5px 0 #fff, 0 -1.5px 0 #fff, 1.5px -1.5px 0 #fff,
-      -1.5px  0     0 #fff,                   1.5px  0     0 #fff,
-      -1.5px  1.5px 0 #fff, 0  1.5px 0 #fff, 1.5px  1.5px 0 #fff;
-    white-space: nowrap;
-  }
-  .point-label::before { display: none; } /* remove tooltip arrow */
+  .user-icon, .coord-icon { pointer-events:none; } /* taps are resolved geometrically in onMapClick */
 
   #visitCounter {
     position:absolute; bottom:calc(8px + env(safe-area-inset-bottom, 0px)); left:8px; z-index:900;
     opacity:0.85; pointer-events:none;
   }
   #visitCounter img { display:block; height:20px; }
-  /* Measure-distance tool: sits under the compass button (top-right). */
-  .leaflet-bar.measure-control a {
-    display:flex; align-items:center; justify-content:center; color:#222;
-  }
-  .leaflet-bar.measure-control a.active,
-  .leaflet-bar.measure-control a.active:hover { background:#1a73e8; color:#fff; }
-  .leaflet-bar.measure-control { position:relative; }
-  /* Undo button: under the ruler button, only visible while there are points */
-  .leaflet-bar.measure-undo { display:none; margin-top:6px; }
-  .leaflet-bar.measure-undo a {
-    display:flex; align-items:center; justify-content:center; color:#222;
-  }
-  /* Draggable measure points: big invisible touch area, small visible dot */
-  .measure-pt { background:transparent; border:0; display:flex; align-items:center; justify-content:center; }
-  .measure-pt .mp-dot {
-    width:12px; height:12px; box-sizing:border-box; border-radius:50%;
-    background:#FFD400; border:2px solid #000; transition:transform .1s;
-  }
-  .measure-pt.leaflet-drag-target .mp-dot { transform:scale(1.5); }
-  #map.measuring .measure-pt { cursor:grab !important; }
-  /* Live total, shown to the left of the button while measuring */
+
+  /* Custom map controls (compass + measure), styled like the +/- buttons */
+  .maplibregl-ctrl-group button.active,
+  .maplibregl-ctrl-group button.active:hover { background:#1a73e8; color:#fff; }
+  .ctrl-btn { display:flex !important; align-items:center; justify-content:center; color:#222; }
+  .ctrl-btn svg { display:block; }
+  .measure-wrap { position:relative; }
+  .measure-wrap .maplibregl-ctrl-group { box-shadow:0 0 0 2px rgba(0,0,0,.1); }
+  .measure-undo { display:none; margin-top:6px; }
   .measure-readout {
-    position:absolute; right:calc(100% + 8px); top:50%; transform:translateY(-50%);
+    position:absolute; right:calc(100% + 8px); top:2px;
     display:none; background:#fff; color:#000; font-weight:700; font-size:14px;
     padding:5px 10px; border-radius:6px; box-shadow:0 1px 5px rgba(0,0,0,.4);
     white-space:nowrap; pointer-events:none;
   }
-  /* Compass-rotation toggle: sits right under the +/- zoom buttons (top-right). */
-  .leaflet-bar.compass-control a {
-    display:flex; align-items:center; justify-content:center; color:#222;
+  .measure-pt { width:32px; height:32px; display:flex; align-items:center; justify-content:center; cursor:grab; }
+  .measure-pt .mp-dot {
+    width:12px; height:12px; box-sizing:border-box; border-radius:50%;
+    background:#FFD400; border:2px solid #000; transition:transform .1s;
   }
-  .leaflet-bar.compass-control a.active,
-  .leaflet-bar.compass-control a.active:hover { background:#1a73e8; color:#fff; }
-  .compass-control svg { display:block; }
-  /* Small message bubble (permission denied / no compass on this device) */
+  .measure-pt.dragging .mp-dot { transform:scale(1.5); }
+  #map.measuring .maplibregl-canvas-container.maplibregl-interactive { cursor:crosshair; }
+
   #toast {
     position:fixed; left:50%; bottom:calc(56px + env(safe-area-inset-bottom, 0px));
     transform:translateX(-50%); z-index:2000; display:none; max-width:80%;
     background:rgba(0,0,0,.82); color:#fff; font-size:13px; text-align:center;
     padding:8px 14px; border-radius:8px; pointer-events:none;
   }
-  #map.measuring, #map.measuring .leaflet-grab, #map.measuring .leaflet-interactive { cursor:crosshair; }
-  /* While measuring, FAT points must not swallow the tap (they would open a
-     popup and stop it before it reaches the map). Making them click-through
-     sends the tap to the map exactly like a tap on empty ground.
-     Cluster circles are left alone so they still zoom in. */
-  #map.measuring .fat-icon,
-  #map.measuring .fat-icon *,
-  #map.measuring .user-icon,
-  #map.measuring .user-icon *,
-  #map.measuring .coord-icon,
-  #map.measuring .coord-icon * { pointer-events:none !important; }
-  #map.measuring .leaflet-overlay-pane canvas { pointer-events:none !important; }
 
-  /* ---- Filter "0 User" button + red theme ---- */
-  /* Floating button, bottom-right corner (outside the top bar) */
   #bottomBtns {
     position:fixed; right:8px; bottom:calc(8px + env(safe-area-inset-bottom, 0px)); z-index:1100;
     display:flex; gap:8px; align-items:center;
@@ -226,12 +138,10 @@
     height:40px; padding:0 12px; border-radius:8px; border:2px solid transparent;
     background:#9e9e9e; color:#fff; font-size:13px; font-weight:700; cursor:pointer;
     white-space:nowrap; box-shadow:0 2px 4px rgba(0,0,0,.2); box-sizing:border-box;
-    opacity:.6; /* 40% transparent while off */
-    -webkit-tap-highlight-color:transparent;
+    opacity:.6; -webkit-tap-highlight-color:transparent;
   }
   #filterBtn:active, #usageBtn:active { opacity:.8; }
   #filterBtn.active, #usageBtn.active { background:#ff0000; border-color:#fff; opacity:1; }
-  /* Red frame around the whole screen while the filter is on */
   #filterFrame {
     position:fixed; top:0; left:0; right:0; bottom:0; box-sizing:border-box;
     border:4px solid #e00000; z-index:1500; pointer-events:none; display:none;
@@ -279,184 +189,110 @@
   <img src="https://visitor-badge.laobi.icu/badge?page_id=masiraq.fat-map.github.io&left_color=gray&right_color=blue" alt="visits" />
 </div>
 
-<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
-<script src="https://unpkg.com/leaflet-rotate@0.2.8/dist/leaflet-rotate-src.js"></script>
-<script src="https://unpkg.com/leaflet.markercluster@1.5.3/dist/leaflet.markercluster.js"></script>
 <script src="https://unpkg.com/papaparse@5.4.1/papaparse.min.js"></script>
-<!-- leaflet-doubletapdrag@0.1.2, inlined so DOUBLE_CLICK_TIMEOUT can be changed (500 -> 220) -->
-<script>
-function DoubleTapDragInitHook() {
-  var timer = null;
-  var fired = false;
-  var lastTimestamp = null;
-  var DOUBLE_CLICK_TIMEOUT = 220; // ms, measured from the FIRST touchstart to the SECOND touchstart (was 500, then 200)
-  var WAIT_FOR_DRAG_END_TIMEOUT = 100;
+<script type="module">
+import * as maplibregl from 'https://unpkg.com/maplibre-gl@6.19.0/dist/maplibre-gl.mjs';
 
-  this._container.addEventListener('touchstart', L.Util.bind(function (e) {
-    if (e.touches.length !== 1) {
-      return;
-    }
-    var now = Date.now();
-    if (lastTimestamp) {
-      if (now - lastTimestamp < DOUBLE_CLICK_TIMEOUT) {
-        timer = setTimeout(L.Util.bind(function () {
-          this.fire('doubletapdragstart', e);
-          timer = null;
-          fired = true;
-        }, this), WAIT_FOR_DRAG_END_TIMEOUT);
-      }
-      lastTimestamp = null;
-    } else {
-      lastTimestamp = Date.now();
-      setTimeout(L.Util.bind(function () {
-        lastTimestamp = null;
-      }, this), DOUBLE_CLICK_TIMEOUT);
-    }
-  }, this));
+// =============================================================================
+// WHY THIS IS FAST
+// All 100k FAT points live in ONE GeoJSON source. MapLibre indexes and
+// clusters them in a Web Worker (off the main thread) and draws them with
+// WebGL on the GPU, so pan / pinch / zoom / rotate never rebuild anything in
+// JavaScript - every frame is just a GPU redraw. Nothing in this file loops
+// over all points during a gesture; taps use queryRenderedFeatures, which
+// looks only at what is drawn under the finger (spatially indexed).
+// =============================================================================
 
-  this._container.addEventListener('touchend', L.Util.bind(function (e) {
-    if (timer) {
-      clearTimeout(timer);
-      timer = null;
-    }
-    if (fired) {
-      this.fire('doubletapdragend', e);
-      fired = null;
-    }
-  }, this));
+// ---- Basemap providers (fallback order: Google -> Esri -> OpenStreetMap) ----
+const PROVIDERS = {
+  google: {
+    label: 'Google Satellite',
+    url: 'https://{s}.google.com/vt/lyrs=s&x={x}&y={y}&z={z}',
+    subdomains: ['mt0', 'mt1', 'mt2', 'mt3'],
+    maxNativeZoom: 20,
+    gapProne: false,
+    bust: true
+  },
+  esri: {
+    label: 'Esri Satellite',
+    url: 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',
+    subdomains: ['a'],
+    maxNativeZoom: 19,
+    gapProne: true,
+    bust: true
+  },
+  street: {
+    label: 'OpenStreetMap',
+    url: 'https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',
+    subdomains: ['a', 'b', 'c'],
+    maxNativeZoom: 19,
+    gapProne: false,
+    bust: false
+  }
+};
+const FALLBACK_ORDER = ['google', 'esri', 'street'];
+// NOTE on zoom numbers: MapLibre's zoom N shows the same scale as Leaflet's
+// zoom N+1 (512px vs 256px world tiles). Every value below is the old Leaflet
+// value minus 1, so everything appears at exactly the same scale as before.
+const MAP_MAX_ZOOM = 19; // = Leaflet 20
+const DENSE_ZOOM = 9;    // = Leaflet 10: clustering stops from this zoom
+const LABEL_ZOOM = 17;   // = Leaflet 18: name labels appear from this zoom
+const TILE_Z = () => map.getZoom() + 1; // zoom of the 256px basemap tiles being shown
 
-  this._container.addEventListener('touchmove', L.Util.bind(function (e) {
-    if (!fired) {
-      return;
-    }
-
-    this.fire('doubletapdrag', e);
-  }, this));
+function tileUrls(p) {
+  return p.subdomains.map(s => p.url.replace('{s}', s));
 }
 
-L.Map.addInitHook(DoubleTapDragInitHook);
-</script>
-<script src="https://unpkg.com/leaflet-doubletapdragzoom@0.3.2"></script>
-<script>
-const map = L.map('map', {
-  zoomControl: false,
-  attributionControl: false, // removes the "Leaflet | Imagery © Google" bar
-  doubleClickZoom: true, // double-tap / double-click to zoom in (like Google Maps)
-  zoomSnap: 0.25,   // allow smooth fractional zoom levels (needed for the drag-to-zoom gesture below)
-  zoomDelta: 1,
-  // Double-tap, HOLD, then drag up/down to zoom — same gesture and same
-  // smooth engine Leaflet's own two-finger pinch-zoom uses internally
-  // (leaflet-doubletapdragzoom plugin), so it feels identical to pinch.
-  doubleTapDragZoom: 'center',
-  doubleTapDragZoomOptions: { reverse: true }, // drag down = zoom in, drag up = zoom out
-  // Markers no longer slide/scale along with the zoom animation.
-  // Instead they simply disappear during the zoom and reappear,
-  // already re-clustered, once the zoom finishes — this removes the
-  // brief flash of unclustered markers at the new zoom level.
-  markerZoomAnimation: false,
-  // Rotation support (leaflet-rotate plugin). The map still starts north-up
-  // (bearing 0) and nothing rotates by itself: the plugin's own two-finger
-  // rotate gesture, shift+drag rotate, on-screen compass control and its
-  // built-in compass handler are all switched off - the ONLY thing that
-  // rotates the map is the compass button below, driven by the phone sensor.
-  rotate: true,
-  bearing: 0,
-  touchRotate: false,
-  shiftKeyRotate: false,
-  rotateControl: false,
-  compassBearing: false
-}).setView([36.85, 42.97], 10);
-L.control.zoom({ position: 'topright' }).addTo(map);
-
-// ---- Measure-distance tool ------------------------------------------------
-// Button under the +/- controls. Tap it to start measuring: every tap on the
-// map adds a point to a path and the running total (in meters) is shown next
-// to the button. Tap the button again to erase the path and leave the mode.
-// Nothing is created until measuring starts, and only the last segment is
-// added on each tap (the total is accumulated, never recomputed), so it costs
-// nothing while idle and stays cheap on long paths.
-const UNDO_ICON =
-  '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" ' +
-  'stroke-width="2" stroke-linecap="round" stroke-linejoin="round">' +
-  '<path d="M9 14 4 9l5-5"/><path d="M4 9h10.5a5.5 5.5 0 0 1 0 11H11"/></svg>';
-const MEASURE_ICON =
-  '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" ' +
-  'stroke-width="2" stroke-linecap="round" stroke-linejoin="round">' +
-  '<path d="M3 17 17 3l4 4L7 21z"/><path d="M7 13l2 2M10 10l2 2M13 7l2 2"/></svg>';
-
-let measuring = false;
-let measureTotal = 0;
-let measureLast = null;
-let measureLayer = null;   // holds the path + point dots so they clear in one call
-let measureCasing = null;  // dark outline under the path (readable on any imagery)
-let measureLine = null;
-let lastMeasureEvent = null;
-let measureBtn = null;
-let measureUndoBar = null;
-let measureUndoBtn = null;
-let measurePts = [];       // points drawn so far
-let measureMarks = [];     // their dot markers
-let measureSegs = [];      // distance added by each point (0 for the first)
-let measureOut = null;
-
-const MeasureControl = L.Control.extend({
-  options: { position: 'topright' },
-  onAdd: function () {
-    const wrap = L.DomUtil.create('div', 'measure-wrap');
-    const bar = L.DomUtil.create('div', 'leaflet-bar measure-control', wrap);
-    measureBtn = L.DomUtil.create('a', '', bar);
-    measureBtn.href = '#';
-    measureBtn.title = 'Measure distance';
-    measureBtn.setAttribute('role', 'button');
-    measureBtn.setAttribute('aria-label', 'Measure distance');
-    measureBtn.innerHTML = MEASURE_ICON;
-    measureOut = L.DomUtil.create('div', 'measure-readout', bar);
-    measureUndoBar = L.DomUtil.create('div', 'leaflet-bar measure-undo', wrap);
-    measureUndoBtn = L.DomUtil.create('a', '', measureUndoBar);
-    measureUndoBtn.href = '#';
-    measureUndoBtn.title = 'Undo last point';
-    measureUndoBtn.setAttribute('role', 'button');
-    measureUndoBtn.setAttribute('aria-label', 'Undo last point');
-    measureUndoBtn.innerHTML = UNDO_ICON;
-    L.DomEvent.on(measureUndoBtn, 'click', function (e) {
-      L.DomEvent.preventDefault(e);
-      undoMeasurePoint();
-    });
-    // Presses on the control must not reach the map (or they'd add a point).
-    L.DomEvent.disableClickPropagation(wrap);
-    L.DomEvent.on(measureBtn, 'click', function (e) {
-      L.DomEvent.preventDefault(e);
-      toggleMeasure();
-    });
-    return wrap;
-  }
+// Every basemap is its own raster source + layer; only the active one is
+// visible. A hidden layer's source requests no tiles at all.
+const styleSources = {};
+const styleLayers = [];
+FALLBACK_ORDER.forEach((key, i) => {
+  const p = PROVIDERS[key];
+  styleSources['bm-' + key] = {
+    type: 'raster', tiles: tileUrls(p), tileSize: 256, maxzoom: p.maxNativeZoom
+  };
+  styleLayers.push({
+    id: 'bm-' + key, type: 'raster', source: 'bm-' + key,
+    layout: { visibility: i === 0 ? 'visible' : 'none' },
+    paint: { 'raster-fade-duration': 150 }
+  });
 });
 
-// ---- Compass rotation (rotate the map with the phone's compass) -----------
-// Button right under the +/- zoom buttons (the measure tool is below it). OFF by default (map stays north-up). Tap it
-// to turn the map so that the direction you are facing is always "up";
-// tap again to switch it off and return to north-up. The phone's compass
-// sensor is only listened to while this is ON.
-const COMPASS_ICON =
-  '<svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" ' +
-  'stroke-width="2" stroke-linecap="round" stroke-linejoin="round">' +
-  '<circle cx="12" cy="12" r="9.5"/>' +
-  '<path d="M12 5 15.2 12h-6.4z" fill="currentColor"/><path d="M12 19 8.8 12h6.4z"/></svg>';
+const map = new maplibregl.Map({
+  container: 'map',
+  center: [42.97, 36.85],
+  zoom: 9,
+  maxZoom: MAP_MAX_ZOOM,
+  maxPitch: 0,
+  attributionControl: false,
+  // Phones with 3x screens render 2.25x more pixels than 2x ones for
+  // almost no visible gain on satellite imagery - capping at 2 keeps the
+  // GPU comfortably inside the 16 ms/frame budget on mid-range Androids.
+  pixelRatio: Math.min(window.devicePixelRatio || 1, 2),
+  dragRotate: false,
+  pitchWithRotate: false,
+  touchPitch: false,
+  fadeDuration: 0,
+  style: {
+    version: 8,
+    // Only needed for the name labels (zoom 18+). Names use Latin letters,
+    // digits and "-" only, so a single small glyph file (0-255) is ever loaded.
+    glyphs: 'https://protomaps.github.io/basemaps-assets/fonts/{fontstack}/{range}.pbf',
+    sources: styleSources,
+    layers: styleLayers
+  }
+});
+// Rotation is driven ONLY by the compass button (like before): no rotate gestures.
+map.touchZoomRotate.disableRotation();
+map.keyboard.disableRotation();
+map.addControl(new maplibregl.NavigationControl({ showCompass: false }), 'top-right');
 
-let compassOn = false;
-let compassBusy = false;       // true while the iOS permission prompt is open
-let compassBtn = null;
-let compassSvg = null;
-let compassEvt = null;         // DOM event name currently listened to
-let compassTarget = null;      // smoothed heading the map is heading towards (0-360)
-let compassShown = null;       // heading currently applied to the map
-let compassTimer = null;
-let compassWatchdog = null;    // fires if the sensor never delivers a reading
-let bearingSign = null;        // +1: setBearing(b) turns the map clockwise by b; -1: counter-clockwise
-let lastSyncBearing = 0;
-let lastSyncAt = 0;
+// Stop the native long-press menu from covering the map.
+map.getContainer().addEventListener('contextmenu', (e) => e.preventDefault());
+
+// ---- Small helpers ---------------------------------------------------------
 let toastTimer = null;
-
 function showToast(msg) {
   const el = document.getElementById('toast');
   el.textContent = msg;
@@ -465,617 +301,61 @@ function showToast(msg) {
   toastTimer = setTimeout(() => { el.style.display = 'none'; }, 3000);
 }
 
-// Shortest signed turn (degrees) from angle a to angle b, in [-180, 180).
-function angDiff(a, b) { return ((b - a + 540) % 360) - 180; }
+function dist2(a, b) { const dx = a.x - b.x, dy = a.y - b.y; return Math.sqrt(dx * dx + dy * dy); }
 
-function screenAngle() {
-  let a = 0;
-  if (window.screen && screen.orientation && typeof screen.orientation.angle === 'number') a = screen.orientation.angle;
-  else if (typeof window.orientation === 'number') a = window.orientation;
-  return ((a % 360) + 360) % 360;
+// Move the camera so that [lng,lat] ends up offsetY px from the screen centre.
+// Short hops animate; long jumps (target off-screen or >4 zoom levels away)
+// are instant - same behaviour Leaflet's setView had.
+function moveTo(lng, lat, zoom, offsetY) {
+  const p = map.project([lng, lat]);
+  const c = map.getContainer();
+  const onScreen = p.x >= 0 && p.y >= 0 && p.x <= c.clientWidth && p.y <= c.clientHeight;
+  const near = onScreen && Math.abs(zoom - map.getZoom()) <= 4;
+  map.easeTo({ center: [lng, lat], zoom: zoom, offset: [0, offsetY || 0], duration: near ? 450 : 0 });
 }
 
-// Heading (degrees clockwise from north) of the direction the person is
-// facing, from the sensor's alpha/beta/gamma angles. Held flat or lightly
-// tilted, that's where the top edge of the screen points; held (nearly)
-// upright, the top edge points at the sky and tells us nothing, so it
-// switches over to the direction the back of the phone faces instead.
-function headingFromEuler(alpha, beta, gamma) {
-  const r = Math.PI / 180;
-  const a = alpha * r, b = beta * r, g = gamma * r;
-  const sa = Math.sin(a), ca = Math.cos(a);
-  const sb = Math.sin(b), cb = Math.cos(b);
-  const sg = Math.sin(g), cg = Math.cos(g);
-  let tx = -sa * cb, ty = ca * cb;                          // top edge, flattened onto the ground
-  let bx = -(ca * sg + sa * sb * cg), by = ca * sb * cg - sa * sg; // back of the phone, flattened
-  const tl = Math.hypot(tx, ty) || 1, bl = Math.hypot(bx, by) || 1;
-  tx /= tl; ty /= tl; bx /= bl; by /= bl;
-  const w = Math.min(1, Math.max(0, (beta - 55) / 20));     // 0 below 55 deg tilt, 1 above 75
-  const x = tx * (1 - w) + bx * w, y = ty * (1 - w) + by * w;
-  return (Math.atan2(x, y) * 180 / Math.PI + 360) % 360;
+// ---- Popups (one open at a time, like Leaflet) -----------------------------
+let currentPopup = null;
+let popupOpenedAt = 0;
+let popupIsCoord = false;
+
+function closePopup() {
+  if (currentPopup) { const p = currentPopup; currentPopup = null; p.remove(); }
 }
 
-// The plugin's setBearing() direction convention is checked once, on the
-// real map, instead of assumed: turn it to 90, see which way north went on
-// screen, turn it back (all in one go, so nothing is ever drawn).
-function getBearingSign() {
-  if (bearingSign !== null) return bearingSign;
-  bearingSign = 1;
-  try {
-    const before = map.getBearing();
-    const c = map.getCenter();
-    map.setBearing(90);
-    const p0 = map.latLngToContainerPoint(c);
-    const p1 = map.latLngToContainerPoint(L.latLng(c.lat + 0.01, c.lng));
-    map.setBearing(before);
-    const ang = Math.atan2(p1.x - p0.x, -(p1.y - p0.y)) * 180 / Math.PI; // north's angle on screen, clockwise from up
-    if (ang > 45) bearingSign = 1;
-    else if (ang < -45) bearingSign = -1;
-  } catch (err) { console.error(err); }
-  return bearingSign;
-}
-
-function onCompassEvent(e) {
-  let h = null;
-  if (typeof e.webkitCompassHeading === 'number' && !isNaN(e.webkitCompassHeading)) {
-    h = e.webkitCompassHeading;                      // iOS: already clockwise from north
-  } else if (e.alpha !== null && e.alpha !== undefined) {
-    if (compassEvt === 'deviceorientation' && e.absolute !== true) return; // relative alpha is not a compass
-    h = headingFromEuler(e.alpha, e.beta || 0, e.gamma || 0);
-  }
-  if (h === null || isNaN(h)) return;
-  h = (h + screenAngle() + 360) % 360;
-
-  clearTimeout(compassWatchdog);
-  compassWatchdog = null;
-  // Smooth out sensor noise (circular low-pass filter).
-  compassTarget = compassTarget === null ? h : (compassTarget + angDiff(compassTarget, h) * 0.25 + 360) % 360;
-}
-
-// Runs a few times a second: eases the map towards the latest heading and
-// ignores tiny jitter so a phone held still doesn't make the map shiver.
-function compassTick() {
-  if (compassTarget === null) return;
-  if (compassShown === null) compassShown = compassTarget;
-  const d = angDiff(compassShown, compassTarget);
-  if (Math.abs(d) < 0.7) return;
-  compassShown = (compassShown + d * 0.5 + 360) % 360;
-
-  const bearing = ((-getBearingSign() * compassShown) % 360 + 360) % 360;
-  map.setBearing(bearing);
-  if (compassSvg) compassSvg.style.transform = 'rotate(' + (-compassShown) + 'deg)'; // needle keeps pointing at north
-
-  // Rotating uncovers new corners of the screen: now and then, ask the map
-  // layers (tiles, clusters, dots) to fill them in, like after a pan.
-  const now = Date.now();
-  if (now - lastSyncAt > 600 && Math.abs(angDiff(lastSyncBearing, bearing)) >= 4) {
-    lastSyncBearing = bearing;
-    lastSyncAt = now;
-    map.fire('moveend');
-  }
-}
-
-function disableCompass() {
-  compassOn = false;
-  if (compassEvt) { window.removeEventListener(compassEvt, onCompassEvent, true); compassEvt = null; }
-  clearInterval(compassTimer); compassTimer = null;
-  clearTimeout(compassWatchdog); compassWatchdog = null;
-  compassTarget = null;
-  compassShown = null;
-  if (typeof map.setBearing === 'function') map.setBearing(0);
-  if (compassSvg) compassSvg.style.transform = '';
-  if (compassBtn) compassBtn.classList.remove('active');
-  lastSyncBearing = 0;
-  map.fire('moveend');
-}
-
-async function enableCompass() {
-  if (typeof map.setBearing !== 'function') { showToast('Map rotation could not be loaded'); return; }
-  if (!('DeviceOrientationEvent' in window)) { showToast('Compass is not available on this device'); return; }
-
-  // iPhone/iPad (iOS 13+) only hand out compass data after the person
-  // agrees, and the request has to be made from inside this very tap.
-  if (typeof DeviceOrientationEvent.requestPermission === 'function') {
-    compassBusy = true;
-    try {
-      const res = await DeviceOrientationEvent.requestPermission();
-      if (res !== 'granted') { showToast('Compass permission was denied'); return; }
-    } catch (err) {
-      showToast('Compass permission was denied');
-      return;
-    } finally {
-      compassBusy = false;
-    }
-  }
-
-  getBearingSign();
-  compassEvt = ('ondeviceorientationabsolute' in window) ? 'deviceorientationabsolute' : 'deviceorientation';
-  window.addEventListener(compassEvt, onCompassEvent, true);
-  compassTimer = setInterval(compassTick, 100);
-  compassOn = true;
-  compassBtn.classList.add('active');
-  // No reading at all within a few seconds = this device has no compass.
-  compassWatchdog = setTimeout(() => {
-    if (compassOn && compassTarget === null) {
-      disableCompass();
-      showToast('Compass is not available on this device');
-    }
-  }, 3000);
-}
-
-const CompassControl = L.Control.extend({
-  options: { position: 'topright' },
-  onAdd: function () {
-    const bar = L.DomUtil.create('div', 'leaflet-bar compass-control');
-    compassBtn = L.DomUtil.create('a', '', bar);
-    compassBtn.href = '#';
-    compassBtn.title = 'Rotate map with compass';
-    compassBtn.setAttribute('role', 'button');
-    compassBtn.setAttribute('aria-label', 'Rotate map with compass');
-    compassBtn.innerHTML = COMPASS_ICON;
-    compassSvg = compassBtn.firstChild;
-    L.DomEvent.disableClickPropagation(bar);
-    L.DomEvent.on(compassBtn, 'click', function (e) {
-      L.DomEvent.preventDefault(e);
-      if (compassBusy) return;
-      if (compassOn) disableCompass(); else enableCompass();
+function openPopup(lngLat, html, offset, isCoord) {
+  closePopup();
+  const popup = new maplibregl.Popup({
+    closeOnClick: false,         // map clicks are handled in onMapClick
+    closeOnMove: false,
+    maxWidth: '300px',
+    offset: offset || 12,
+    focusAfterOpen: false
+  }).setLngLat(lngLat).setHTML(html).addTo(map);
+  currentPopup = popup;
+  popupOpenedAt = Date.now();
+  popupIsCoord = !!isCoord;
+  popup.on('close', () => { if (currentPopup === popup) currentPopup = null; });
+  // Copy links ("Copy" FAT code / "Copy Location Coordinates")
+  const link = popup.getElement().querySelector('.copy-text');
+  if (link) {
+    link.addEventListener('click', (ev) => {
+      ev.preventDefault();
+      const text = link.getAttribute('data-copy') || '';
+      const label = link.getAttribute('data-label') || 'Copy';
+      copyText(text).then(
+        () => { link.textContent = 'Copied ✓'; },
+        () => { link.textContent = 'Copy failed'; }
+      ).then(() => { setTimeout(() => { link.textContent = label; }, 1500); });
     });
-    return bar;
   }
-});
-new CompassControl().addTo(map);
-// Added after the compass button so it sits below it (controls stack in the order added).
-new MeasureControl().addTo(map);
-
-function formatMeters(m) {
-  return Math.round(m).toLocaleString('en-US') + ' m';
-}
-
-function startMeasure() {
-  measuring = true;
-  measureTotal = 0;
-  measureLast = null;
-  measurePts = []; measureMarks = []; measureSegs = [];
-  measureUndoBar.style.display = 'none';
-  const svg = L.svg({ padding: 0.5 }); // separate from the canvas point layer
-  measureCasing = L.polyline([], { renderer: svg, interactive: false, color: '#000', weight: 6, opacity: 0.55 });
-  measureLine = L.polyline([], { renderer: svg, interactive: false, color: '#FFD400', weight: 3 });
-  measureLayer = L.layerGroup([measureCasing, measureLine]).addTo(map);
-  measureBtn.classList.add('active');
-  measureOut.textContent = formatMeters(0);
-  measureOut.style.display = 'block';
-  map.getContainer().classList.add('measuring');
-  // A double-tap (or double-tap-and-drag) would otherwise drop stray points
-  // while zooming, so those gestures are paused during measuring.
-  // Pinch, the +/- buttons and normal dragging all keep working.
-  map.doubleClickZoom.disable();
-  if (map.doubleTapDragZoom) map.doubleTapDragZoom.disable();
-}
-
-function stopMeasure() {
-  measuring = false;
-  if (measureLayer) { measureLayer.clearLayers(); measureLayer.remove(); }
-  measureLayer = measureCasing = measureLine = measureLast = null;
-  measureTotal = 0;
-  measurePts = []; measureMarks = []; measureSegs = [];
-  measureUndoBar.style.display = 'none';
-  measureBtn.classList.remove('active');
-  measureOut.style.display = 'none';
-  map.getContainer().classList.remove('measuring');
-  map.doubleClickZoom.enable();
-  if (map.doubleTapDragZoom) map.doubleTapDragZoom.enable();
-}
-
-function toggleMeasure() {
-  if (measuring) stopMeasure(); else startMeasure();
-}
-
-// If the tap lands within ~14px of a FAT point (zoom 10+, where the visible
-// points are in denseMarkers), use that FAT's exact position.
-function snapToFat(latlng) {
-  if (typeof denseMarkers === 'undefined' || !denseMarkers.size) return latlng;
-  const p = map.latLngToContainerPoint(latlng);
-  let best = null, bestD = 14;
-  denseMarkers.forEach(function (m) {
-    const d = p.distanceTo(map.latLngToContainerPoint(m.getLatLng()));
-    if (d < bestD) { bestD = d; best = m.getLatLng(); }
-  });
-  return best || latlng;
-}
-
-// A measure point is a draggable marker: press it and move your finger to
-// reposition that point; the path and the total length update live.
-function createMeasureDot(ll) {
-  const dot = L.marker(ll, {
-    draggable: true,
-    icon: L.divIcon({
-      className: 'measure-pt',
-      html: '<div class="mp-dot"></div>',
-      iconSize: [32, 32], iconAnchor: [16, 16]
-    }),
-    keyboard: false,
-    zIndexOffset: 500
-  });
-  dot.on('drag', function () {
-    const i = measureMarks.indexOf(dot);
-    if (i < 0) return;
-    measurePts[i] = dot.getLatLng();
-    refreshMeasure();
-  });
-  dot.on('dragend', function () {
-    const i = measureMarks.indexOf(dot);
-    if (i < 0) return;
-    const snapped = snapToFat(dot.getLatLng());   // same FAT-point snapping as when adding
-    dot.setLatLng(snapped);
-    measurePts[i] = snapped;
-    refreshMeasure();
-  });
-  return dot;
-}
-
-// Redraw the path and recompute every segment + the total from measurePts.
-function refreshMeasure() {
-  measureCasing.setLatLngs(measurePts);
-  measureLine.setLatLngs(measurePts);
-  measureTotal = 0;
-  for (let k = 0; k < measurePts.length; k++) {
-    measureSegs[k] = k ? map.distance(measurePts[k - 1], measurePts[k]) : 0;
-    measureTotal += measureSegs[k];
-  }
-  measureLast = measurePts.length ? measurePts[measurePts.length - 1] : null;
-  measureOut.textContent = formatMeters(measureTotal);
-}
-
-function addMeasurePoint(e) {
-  if (!measuring) return;
-  // The same native click can reach us more than once (via the FAT point
-  // and via the map) - count it once.
-  if (e.originalEvent) {
-    if (e.originalEvent === lastMeasureEvent) return;
-    lastMeasureEvent = e.originalEvent;
-  }
-
-  const ll = snapToFat(e.latlng);
-  const seg = measureLast ? map.distance(measureLast, ll) : 0;
-  measureTotal += seg;
-  measureLast = ll;
-  measurePts.push(ll);
-  measureSegs.push(seg);
-  measureCasing.addLatLng(ll);
-  measureLine.addLatLng(ll);
-  const dot = createMeasureDot(ll);
-  measureLayer.addLayer(dot);
-  measureMarks.push(dot);
-  measureOut.textContent = formatMeters(measureTotal);
-  measureUndoBar.style.display = 'block';
-}
-
-// Remove the most recently added point (repeat to step back further).
-function undoMeasurePoint() {
-  if (!measuring || !measurePts.length) return;
-  measurePts.pop();
-  measureTotal -= measureSegs.pop();
-  measureLayer.removeLayer(measureMarks.pop());
-  measureCasing.setLatLngs(measurePts);
-  measureLine.setLatLngs(measurePts);
-  measureLast = measurePts.length ? measurePts[measurePts.length - 1] : null;
-  if (!measurePts.length) {
-    measureTotal = 0;
-    measureUndoBar.style.display = 'none';
-  }
-  measureOut.textContent = formatMeters(measureTotal);
-}
-
-map.on('click', addMeasurePoint);
-
-// ---- Long-press on empty map: show the pressed location's coordinates ----
-// Leaflet normalizes both mouse and single-finger touch into the same
-// 'mousedown'/'mousemove'/'mouseup' events, so one set of handlers covers
-// desktop and mobile alike (consistent with every other handler in this
-// file - no separate touch-specific code needed).
-const LONG_PRESS_MS = 1000;
-// "Not on a FAT point" is checked geometrically (pixel distance to every
-// point's on-screen position) rather than by relying on event-propagation
-// order between the canvas/marker layers and the map - that would differ
-// between the dense-zoom canvas dots, the clustered markers and plain
-// clusters, and would be fragile. A plain distance loop over all points is
-// trivial even for a few thousand points since it only runs once per press.
-const LONG_PRESS_POINT_THRESHOLD_PX = 25;
-const LONG_PRESS_MOVE_TOLERANCE_PX = 18; // finger drift beyond this cancels the hold (loose enough to absorb normal touchscreen jitter)
-
-// Extra safety net alongside touch-action:none above: explicitly block the
-// native long-press/right-click context menu on the map so the OS can never
-// swallow the hold or cover the page with its own menu before our timer
-// finishes.
-map.getContainer().addEventListener('contextmenu', (e) => e.preventDefault());
-
-let longPressTimer = null;
-let longPressStartPx = null;
-let coordPopup = null;      // the currently-open long-press popup, if any
-let coordPopupOpenedAt = 0; // Date.now() of the moment it opened
-
-// Releasing the finger/mouse that completed the hold is itself seen by
-// Leaflet as a "click" on the map - and on iPhone specifically, that single
-// physical release seems to produce more than one such 'click' event (a
-// known compatibility quirk of touch browsers, which can synthesize an
-// extra mouse-style click alongside Leaflet's own touch-tap click for the
-// same release). A one-shot "ignore exactly the next click" flag only
-// absorbs one of them, leaving the other to close the popup the instant it
-// opens - which is what made it look like dismissing needed an extra, real
-// tap. A short time-based grace window instead ignores ALL clicks for a
-// brief moment right after opening, however many of them fire, and only
-// treats a click as a genuine dismiss once that moment has passed.
-const COORD_POPUP_OPEN_GRACE_MS = 400;
-
-// A click elsewhere (a genuinely new click, not one caused by the release
-// that opened the popup) closes it - closeOnClick is turned off on the
-// popup itself (below) specifically so that release doesn't close it; this
-// handler takes over closing it for every later click instead.
-map.on('click', () => {
-  if (!coordPopup) return;
-  if (Date.now() - coordPopupOpenedAt < COORD_POPUP_OPEN_GRACE_MS) return;
-  map.closePopup(coordPopup);
-});
-
-function isNearAnyPoint(containerPoint, thresholdPx) {
-  const pts = activePoints();
-  for (let i = 0; i < pts.length; i++) {
-    const p = pts[i];
-    const px = map.latLngToContainerPoint([p.lat, p.lng]);
-    if (containerPoint.distanceTo(px) <= thresholdPx) return true;
-  }
-  return false;
-}
-
-function cancelLongPress() {
-  if (longPressTimer) { clearTimeout(longPressTimer); longPressTimer = null; }
-  longPressStartPx = null;
-}
-
-function startLongPress(containerPoint, latlng) {
-  cancelLongPress();
-  if (measuring) return; // don't fight the measuring tool's own tap handling
-  if (isNearAnyPoint(containerPoint, LONG_PRESS_POINT_THRESHOLD_PX)) return; // let the point's own popup handle this press
-  longPressStartPx = containerPoint;
-  longPressTimer = setTimeout(() => {
-    longPressTimer = null;
-    coordPopupOpenedAt = Date.now();
-    coordPopup = L.popup({ closeOnClick: false })
-      .setLatLng(latlng)
-      .setContent(coordPopupContent(latlng.lat, latlng.lng))
-      .openOn(map);
-    coordPopup.on('remove', () => { coordPopup = null; });
-  }, LONG_PRESS_MS);
-}
-
-// Real mouse (desktop/laptop): Leaflet's 'mousedown'/'mousemove'/'mouseup'
-// map events are a direct passthrough of the native DOM events, which fire
-// exactly when the mouse button goes down and stay accurate for as long as
-// it's held - this path already works correctly.
-map.on('mousedown', (e) => startLongPress(e.containerPoint, e.latlng));
-map.on('mousemove', (e) => {
-  if (longPressTimer && longPressStartPx && e.containerPoint.distanceTo(longPressStartPx) > LONG_PRESS_MOVE_TOLERANCE_PX) {
-    cancelLongPress();
-  }
-});
-map.on('mouseup', cancelLongPress);
-// Deliberately NOT listening to Leaflet's own 'dragstart': it fires once
-// movement passes just 3px (the map's default clickTolerance), which a
-// touchscreen crosses from ordinary finger tremor alone even when the
-// person isn't trying to move at all - cancelling almost every hold before
-// it could complete. LONG_PRESS_MOVE_TOLERANCE_PX above (our own mousemove
-// check) is the only movement cancellation now, and is forgiving enough for
-// that natural jitter while still catching a real, deliberate drag quickly.
-map.on('zoomstart', cancelLongPress);
-
-// Touch (iPhone/iPad and most Android browsers): a real native 'mousedown'
-// DOM event is NOT reliably fired the moment a finger touches down - at
-// best, some browsers synthesize one only once the finger lifts (as part of
-// the touchend -> mousedown/mouseup/click compatibility sequence browsers
-// fire for tap support), which happens all at once, after the hold is
-// already over, leaving no time for the 1s timer to ever complete. That's
-// why this worked on a laptop but never on an iPhone: 'mousedown' above
-// simply never arrived while the finger was actually down. Leaflet's
-// higher-level 'click' event (used for measuring/markers elsewhere in this
-// file) is unaffected by this and already fires correctly on tap - it's
-// only this literal "is the mouse/finger currently down" signal that's
-// unreliable on touch, so it's rebuilt here from the raw touchstart/
-// touchmove/touchend events directly (same technique already used for the
-// double-tap-zoom gesture further below), independent of whether a
-// synthetic mousedown ever shows up.
-(function enableTouchLongPress() {
-  const container = map.getContainer();
-  function pointFromTouch(touch) {
-    const rect = container.getBoundingClientRect();
-    return L.point(touch.clientX - rect.left, touch.clientY - rect.top);
-  }
-  container.addEventListener('touchstart', (e) => {
-    if (e.touches.length !== 1) { cancelLongPress(); return; } // a 2nd finger means pinch-zoom, not a hold
-    const pt = pointFromTouch(e.touches[0]);
-    startLongPress(pt, map.containerPointToLatLng(pt));
-  }, { passive: true });
-  container.addEventListener('touchmove', (e) => {
-    if (!longPressTimer || !longPressStartPx) return;
-    if (e.touches.length !== 1 || pointFromTouch(e.touches[0]).distanceTo(longPressStartPx) > LONG_PRESS_MOVE_TOLERANCE_PX) {
-      cancelLongPress();
-    }
-  }, { passive: true });
-  container.addEventListener('touchend', cancelLongPress, { passive: true });
-  container.addEventListener('touchcancel', cancelLongPress, { passive: true });
-})();
-
-
-// Tapping a FAT point while measuring should only add a path point, not pop
-// up its info box over the path. (Popups opened by search have no source
-// layer, so those still open normally.)
-map.on('popupopen', function (e) {
-  if (measuring && e.popup._source) e.popup.close();
-});
-// ---- Basemap providers (fallback order: Google -> Esri -> OpenStreetMap) ----
-// maxNativeZoom = the last zoom level the provider really has tiles for.
-// maxZoom is the same (20) for ALL layers, so switching provider while zoomed
-// in (19-20) never produces a blank map: tiles are just upscaled instead.
-const PROVIDERS = {
-  google: {
-    label: 'Google Satellite',
-    url: 'https://{s}.google.com/vt/lyrs=s&x={x}&y={y}&z={z}',
-    subdomains: ['mt0', 'mt1', 'mt2', 'mt3'],
-    maxNativeZoom: 20,
-    attribution: 'Imagery &copy; Google',
-    bust: true
-  },
-  esri: {
-    label: 'Esri Satellite',
-    url: 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',
-    subdomains: ['a'],
-    maxNativeZoom: 19,
-    attribution: 'Tiles &copy; Esri, Maxar, Earthstar Geographics',
-    gapProne: true, // areas without imagery at high zoom answer 404 (looks like an error)
-    bust: true
-  },
-  street: {
-    label: 'OpenStreetMap',
-    url: 'https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',
-    subdomains: ['a', 'b', 'c'],
-    maxNativeZoom: 19,
-    attribution: '&copy; OpenStreetMap contributors',
-    bust: false
-  }
-};
-// Fallback order: Google -> Esri -> OpenStreetMap
-const FALLBACK_ORDER = ['google', 'esri', 'street'];
-const MAP_MAX_ZOOM = 20;
-const baseLayers = {};
-FALLBACK_ORDER.forEach(key => {
-  const p = PROVIDERS[key];
-  baseLayers[key] = L.tileLayer(p.url, {
-    maxZoom: MAP_MAX_ZOOM,
-    maxNativeZoom: p.maxNativeZoom,
-    subdomains: p.subdomains,
-    attribution: p.attribution
-  });
-});
-// NOTE: no layer is added here; the first basemap (Google) is added by
-// setBaseLayer(userKey) in the layer-switcher section further down.
-
-// All clusters look identical (plain dot, no count), so build the icon
-// once and hand back the same instance every time instead of allocating a
-// new L.divIcon per cluster on every render/pan.
-const clusterIcon = L.divIcon({
-  html: '<div class="cluster-dot"></div>',
-  className: '',
-  iconSize: [24, 24]
-});
-
-const clusterGroup = L.markerClusterGroup({
-  chunkedLoading: true,
-  maxClusterRadius: 60,
-  spiderfyOnMaxZoom: true,
-  animate: false,
-  animateAddingMarkers: false,
-  iconCreateFunction: function () {
-    return clusterIcon;
-  }
-});
-
-// Canvas renderer for the "dense" high-zoom view. Only points currently
-// inside the visible map area (plus a small buffer) are ever registered
-// with it. When the view is only panned (zoom unchanged) we ADD/REMOVE
-// just the points that entered/left the view, instead of tearing down
-// and rebuilding everything — full rebuilds are reserved for actual zoom
-// changes, since those are infrequent and also change whether labels
-// (permanent tooltips) should exist at all.
-// tolerance: expands the clickable/tappable area around every circleMarker
-// drawn on this canvas by ~10px, without changing how big the dot looks -
-// makes tapping small points on mobile far more forgiving.
-const canvasRenderer = L.canvas({ padding: 0.5, tolerance: 5 });
-const denseLayer = L.layerGroup();
-const denseMarkers = new Map(); // point name -> currently-rendered L.circleMarker
-const DENSE_ZOOM = 10; // clustering stops / canvas layer takes over from this zoom
-const LABEL_ZOOM = 18; // permanent name labels appear from this zoom
-
-let allPoints = [];
-let pointByName = {};
-let allClusterMarkers = [];
-let usageOn = false;  // "Usage": color points by Installed ONTs count
-let filterOn = false; // "Filter 0 User": show only FATs whose Installed ONTs is 0
-
-// Points currently allowed to be shown (all, or only the zero-ONT ones).
-function activePoints() {
-  return filterOn ? allPoints.filter(p => p.zero) : allPoints;
-}
-
-// Usage mode colors, by Installed ONTs count.
-const USAGE_COLORS = ['#00FF00','#55DD55','#99BB99','#808080','#808080','#808080','#808080','#808080','#808080','#808080','#808080','#808080','#808080','#808080','#AA8080','#D55555','#FF0000'];
-function usageColor(ontStr) {
-  // Only whole numbers 0..16 get their own shade; anything else (empty, text, N/A, 17+) is green.
-  if (!/^\d+$/.test(ontStr)) return '#00FF00';
-  const n = Number(ontStr);
-  return n <= 16 ? USAGE_COLORS[n] : '#00FF00';
-}
-// Color a point should currently be drawn with.
-function pointColor(p) { return usageOn ? p.uc : p.c; }
-
-// Partner -> dot color. Anything not listed here (missing, "#N/A", or spelled
-// differently) falls back to gray. Exact match after trimming whitespace.
-// A Map is used (not a plain object) so odd values like "constructor" can't
-// accidentally hit an inherited property.
-const DEFAULT_POINT_COLOR = '#808080';
-const PARTNER_COLORS = new Map([
-  ['Fiber Speed (Duhok)', '#FF0000'],
-  ['Waarpak',             '#0080FF'],
-  ['3BG',                 '#00B400'],
-  ['Delta (Zakho)',       '#FF8000'],
-  ['Delta (Duhok)',       '#FF8000'],
-  ['Strong Link Duhok',   '#FF6699'],
-  ['PrimeLink Duhok',     '#48B6E8'],
-  ['BigLine',             '#00B400']
-]);
-
-// Same look as the close-zoom circle markers (makeCircleMarker), but as a
-// divIcon so it can be used on an L.marker (needed for markercluster).
-// Only a handful of distinct colors exist, so each icon object is built once
-// and shared by every marker of that color - no per-marker icon allocation.
-const pointIconCache = new Map();
-function getPointIcon(color) {
-  let icon = pointIconCache.get(color);
-  if (!icon) {
-    icon = L.divIcon({
-      className: 'fat-icon',
-      html: '<div class="point-hit-area"><div class="point-dot" style="background:' + color + '"></div></div>',
-      iconSize: [27, 27]
-    });
-    pointIconCache.set(color, icon);
-  }
-  return icon;
-}
-
-function popupContent(p) {
-  return '<b>' + p.n + '</b> &nbsp;<a href="#" class="copy-text" data-copy="' + p.n + '" data-label="Copy">Copy</a><br>' +
-    'Partner : ' + p.pt + '<br>' +
-    'Area : ' + p.area + '<br>' +
-    'Installed ONTs : ' + p.ont + '<br>' +
-    '<a href="https://www.google.com/maps?q=' + p.lat + ',' + p.lng + '" target="_blank">Open in Google Maps</a>';
-}
-
-// Decimal-degree coordinates, 6 decimal places (~11cm precision - plenty for
-// this use, and short enough to read/copy comfortably).
-function formatDecimalCoords(lat, lng) {
-  return lat.toFixed(6) + ', ' + lng.toFixed(6);
-}
-
-function coordPopupContent(lat, lng) {
-  const coords = formatDecimalCoords(lat, lng);
-  return '<b>' + coords + '</b><br>' +
-    '<a href="#" class="copy-text" data-copy="' + coords + '" data-label="Copy Location Coordinates">Copy Location Coordinates</a><br>' +
-    '<a href="https://www.google.com/maps?q=' + lat + ',' + lng + '" target="_blank">Open in Google Maps</a>';
+  return popup;
 }
 
 function copyText(text) {
   if (navigator.clipboard && window.isSecureContext) {
     return navigator.clipboard.writeText(text);
   }
-  // Fallback for older browsers / non-HTTPS contexts
   return new Promise((resolve, reject) => {
     const ta = document.createElement('textarea');
     ta.value = text;
@@ -1089,263 +369,618 @@ function copyText(text) {
   });
 }
 
-// Leaflet stops click propagation at the popup container, so a document-level
-// listener wouldn't see the click. Attach directly when each popup opens.
-// Generic: works for the FAT-code "Copy" link and the long-press
-// "Copy Location Coordinates" link alike - each just carries its own text
-// to copy and its own label to restore afterward.
-map.on('popupopen', (e) => {
-  const el = e.popup.getElement();
-  if (!el) return;
-  const link = el.querySelector('.copy-text');
-  if (!link) return;
-  link.addEventListener('click', (ev) => {
-    ev.preventDefault();
-    const text = link.getAttribute('data-copy') || '';
-    const label = link.getAttribute('data-label') || 'Copy';
-    copyText(text).then(
-      () => { link.textContent = 'Copied \u2713'; },
-      () => { link.textContent = 'Copy failed'; }
-    ).then(() => {
-      setTimeout(() => { link.textContent = label; }, 1500);
+function popupContent(p) {
+  return '<b>' + p.n + '</b> &nbsp;<a href="#" class="copy-text" data-copy="' + p.n + '" data-label="Copy">Copy</a><br>' +
+    'Partner : ' + p.pt + '<br>' +
+    'Area : ' + p.area + '<br>' +
+    'Installed ONTs : ' + p.ont + '<br>' +
+    '<a href="https://www.google.com/maps?q=' + p.lat + ',' + p.lng + '" target="_blank">Open in Google Maps</a>';
+}
+function openFatPopup(p) { openPopup([p.lng, p.lat], popupContent(p), 12, false); }
+
+function formatDecimalCoords(lat, lng) { return lat.toFixed(6) + ', ' + lng.toFixed(6); }
+function coordPopupContent(lat, lng) {
+  const coords = formatDecimalCoords(lat, lng);
+  return '<b>' + coords + '</b><br>' +
+    '<a href="#" class="copy-text" data-copy="' + coords + '" data-label="Copy Location Coordinates">Copy Location Coordinates</a><br>' +
+    '<a href="https://www.google.com/maps?q=' + lat + ',' + lng + '" target="_blank">Open in Google Maps</a>';
+}
+
+// ---- FAT point data + colors ------------------------------------------------
+let allPoints = [];
+let pointByName = {};
+let usageOn = false;
+let filterOn = false;
+let pointsReady = false;
+
+const USAGE_COLORS = ['#00FF00','#55DD55','#99BB99','#808080','#808080','#808080','#808080','#808080','#808080','#808080','#808080','#808080','#808080','#808080','#AA8080','#D55555','#FF0000'];
+function usageColor(ontStr) {
+  if (!/^\d+$/.test(ontStr)) return '#00FF00';
+  const n = Number(ontStr);
+  return n <= 16 ? USAGE_COLORS[n] : '#00FF00';
+}
+const DEFAULT_POINT_COLOR = '#808080';
+const PARTNER_COLORS = new Map([
+  ['Fiber Speed (Duhok)', '#FF0000'],
+  ['Waarpak',             '#0080FF'],
+  ['3BG',                 '#00B400'],
+  ['Delta (Zakho)',       '#FF8000'],
+  ['Delta (Duhok)',       '#FF8000'],
+  ['Strong Link Duhok',   '#FF6699'],
+  ['PrimeLink Duhok',     '#48B6E8'],
+  ['BigLine',             '#00B400']
+]);
+
+// Two point sets: 'all' and 'zero' (Installed ONTs = 0). Each has its own
+// clustered source so "Filter 0 User" is just a visibility switch - instant,
+// clusters stay correct, nothing is re-sent to the worker.
+const SETS = ['all', 'zero'];
+const L_CL = s => 'cl-' + s, L_PT = s => 'pt-' + s, L_LB = s => 'lb-' + s;
+function activeSet() { return filterOn ? 'zero' : 'all'; }
+function hitLayers(withClusters) {
+  const s = activeSet();
+  return withClusters ? [L_CL(s), L_PT(s)] : [L_PT(s)];
+}
+
+function toFeatureCollection(points) {
+  const features = new Array(points.length);
+  for (let i = 0; i < points.length; i++) {
+    const p = points[i];
+    features[i] = {
+      type: 'Feature',
+      geometry: { type: 'Point', coordinates: [p.lng, p.lat] },
+      properties: { n: p.n, c: p.c, uc: p.uc }
+    };
+  }
+  return { type: 'FeatureCollection', features: features };
+}
+
+function pointColorExpr() { return ['get', usageOn ? 'uc' : 'c']; }
+
+function addPointLayers(data) {
+  SETS.forEach(s => {
+    map.addSource('fat-' + s, {
+      type: 'geojson',
+      data: s === 'zero' ? toFeatureCollection(data.filter(p => p.zero)) : toFeatureCollection(data),
+      cluster: true,
+      clusterMaxZoom: DENSE_ZOOM - 1,
+      clusterRadius: 60,
+      maxzoom: 16,     // tiles past z16 are overzoomed (still ~cm precision)
+      buffer: 32
+    });
+    const vis = s === activeSet() ? 'visible' : 'none';
+    map.addLayer({
+      id: L_CL(s), type: 'circle', source: 'fat-' + s,
+      filter: ['has', 'point_count'],
+      layout: { visibility: vis },
+      paint: {
+        'circle-radius': 12, 'circle-color': '#808080',
+        'circle-stroke-width': 3, 'circle-stroke-color': '#ffffff'
+      }
+    });
+    map.addLayer({
+      id: L_PT(s), type: 'circle', source: 'fat-' + s,
+      filter: ['!', ['has', 'point_count']],
+      layout: { visibility: vis },
+      paint: {
+        'circle-radius': 7, 'circle-color': pointColorExpr(),
+        'circle-stroke-width': 2, 'circle-stroke-color': '#ffffff'
+      }
+    });
+    map.addLayer({
+      id: L_LB(s), type: 'symbol', source: 'fat-' + s,
+      minzoom: LABEL_ZOOM,
+      filter: ['!', ['has', 'point_count']],
+      layout: {
+        visibility: vis,
+        'text-field': ['get', 'n'],
+        'text-font': ['Noto Sans Medium'],
+        'text-size': 11,
+        'text-anchor': 'left',
+        'text-offset': [1.1, 0],
+        'text-max-width': 100,           // never wrap the code at its '-'
+        'text-allow-overlap': true,      // every point keeps its name (as before)
+        'text-ignore-placement': true
+      },
+      paint: { 'text-color': '#000000', 'text-halo-color': '#ffffff', 'text-halo-width': 1.6 }
     });
   });
-});
+}
 
-function makeCircleMarker(p, withLabel) {
-  const c = L.circleMarker([p.lat, p.lng], {
-    renderer: canvasRenderer,
-    radius: 7,
-    weight: 2,
-    color: '#ffffff',
-    fillColor: pointColor(p),
-    fillOpacity: 1
+function applyLayerVisibility() {
+  if (!pointsReady) return;
+  SETS.forEach(s => {
+    const v = s === activeSet() ? 'visible' : 'none';
+    [L_CL(s), L_PT(s), L_LB(s)].forEach(id => map.setLayoutProperty(id, 'visibility', v));
   });
-  c.bindPopup(popupContent(p));
-  if (withLabel) {
-    c.bindTooltip(p.n, {
-      permanent: true,
-      direction: 'right',
-      offset: [8, 0],
-      className: 'point-label',
-      interactive: false
-    });
+}
+
+// Nearest rendered FAT/cluster feature within r px of a screen point.
+function nearestFeature(pt, r, withClusters) {
+  if (!pointsReady) return null;
+  const feats = map.queryRenderedFeatures([[pt.x - r, pt.y - r], [pt.x + r, pt.y + r]], { layers: hitLayers(withClusters) });
+  let best = null, bestD = r;
+  for (const f of feats) {
+    const d = dist2(map.project(f.geometry.coordinates), pt);
+    if (d <= bestD) { bestD = d; best = f; }
   }
-  return c;
+  return best;
+}
+function nearestFat(pt, r) {
+  if (map.getZoom() < DENSE_ZOOM) return null;
+  const f = nearestFeature(pt, r, false);
+  return f && !f.properties.cluster ? pointByName[f.properties.n] : null;
 }
 
-// Geographic box that contains the whole visible screen, even when the map is
-// rotated: built from the four screen corners (always correct, whatever the
-// rotation) instead of relying on map.getBounds().
-function visibleBounds() {
-  const sz = map.getSize();
-  return L.latLngBounds([
-    map.containerPointToLatLng(L.point(0, 0)),
-    map.containerPointToLatLng(L.point(sz.x, 0)),
-    map.containerPointToLatLng(L.point(0, sz.y)),
-    map.containerPointToLatLng(L.point(sz.x, sz.y))
-  ]);
+async function zoomIntoCluster(f) {
+  try {
+    const z = await map.getSource('fat-' + activeSet()).getClusterExpansionZoom(f.properties.cluster_id);
+    map.easeTo({ center: f.geometry.coordinates, zoom: Math.min(z, MAP_MAX_ZOOM), duration: 400 });
+  } catch (e) { console.error(e); }
 }
 
-// Incremental: only adds points newly entering the view / removes points
-// that left it. Safe to call often (e.g. on every 'moveend' while panning).
-function refreshDenseLayerIncremental() {
-  if (map.getZoom() < DENSE_ZOOM || !allPoints.length) return;
-  const withLabel = map.getZoom() >= LABEL_ZOOM;
-  const bounds = visibleBounds().pad(0.3); // small buffer so points don't pop in/out abruptly
-  const wantNames = new Set();
-
-  const pts = activePoints();
-  for (let i = 0; i < pts.length; i++) {
-    const p = pts[i];
-    if (!bounds.contains([p.lat, p.lng])) continue;
-    wantNames.add(p.n);
-    if (!denseMarkers.has(p.n)) {
-      const c = makeCircleMarker(p, withLabel);
-      denseMarkers.set(p.n, c);
-      denseLayer.addLayer(c);
-    }
-  }
-
-  for (const [name, marker] of denseMarkers) {
-    if (!wantNames.has(name)) {
-      denseLayer.removeLayer(marker);
-      denseMarkers.delete(name);
-    }
-  }
-}
-
-// Full rebuild: used only when the zoom level itself changes, since that
-// also changes whether labels should be attached to each point.
-function rebuildDenseLayer() {
-  denseLayer.clearLayers();
-  denseMarkers.clear();
-  refreshDenseLayerIncremental();
-}
-
-function loadFailed(err) {
-  console.error(err);
-}
+// ---- Load the data (one time) ---------------------------------------------
+const mapLoaded = new Promise(res => map.once('load', res));
 
 fetch('data.csv')
-  .then(r => {
-    if (!r.ok) throw new Error('HTTP ' + r.status);
-    return r.text();
-  })
+  .then(r => { if (!r.ok) throw new Error('HTTP ' + r.status); return r.text(); })
   .then(csvText => {
-    // Synchronous parse: for a file this size, this is faster than
-    // worker:true, whose fixed cost (spinning up a Worker + copying the
-    // CSV text and the parsed results across the thread boundary) was
-    // outweighing the parse time itself and delaying the first paint.
-    const parsed = Papa.parse(csvText, {
-      header: true,
-      dynamicTyping: false,
-      skipEmptyLines: true
-    });
-
+    const parsed = Papa.parse(csvText, { header: true, dynamicTyping: false, skipEmptyLines: true });
     const data = [];
     parsed.data.forEach(row => {
       const name = (row.NAME || '').trim();
       const lat = parseFloat(row.latitude);
       const lng = parseFloat(row.longitude);
-      if (!name || isNaN(lat) || isNaN(lng)) return; // skip blank/invalid rows (e.g. "unavailable")
-      // Color is resolved once here, so drawing later is just a property read.
+      if (!name || isNaN(lat) || isNaN(lng)) return;
       const partner = (row.Partner || '').trim();
-      const color = PARTNER_COLORS.get(partner) || DEFAULT_POINT_COLOR;
       const ont = (row['Installed ONTs'] || '').trim();
       const area = (row.Area || '').trim().replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
       data.push({
-        n: name, search: name.toUpperCase(), lat: lat, lng: lng, c: color,
+        n: name, search: name.toUpperCase(), lat: lat, lng: lng,
+        c: PARTNER_COLORS.get(partner) || DEFAULT_POINT_COLOR,
         pt: partner || 'Unknown', area: area || 'Unknown', ont: ont || 'Unknown',
         zero: ont !== '' && Number(ont) === 0,
         uc: usageColor(ont)
       });
     });
-
     allPoints = data;
-
-    const clusterMarkers = [];
-
-    data.forEach(p => {
-      pointByName[p.n] = p;
-
-      // Regular marker, used while clustered (zoom < DENSE_ZOOM)
-      const m = L.marker([p.lat, p.lng], { icon: getPointIcon(pointColor(p)) });
-      m.bindPopup(popupContent(p));
-      m._p = p;
-      clusterMarkers.push(m);
+    for (const p of data) pointByName[p.n] = p;
+    return mapLoaded.then(() => {
+      addPointLayers(data);
+      pointsReady = true;
     });
-
-    allClusterMarkers = clusterMarkers;
-    clusterGroup.addLayers(filterOn ? clusterMarkers.filter(m => m._p.zero) : clusterMarkers);
-    // Force a real render here: if auto-locate already panned/zoomed the
-    // map (and fired zoomend) before this data finished loading,
-    // denseMode/labelMode may already "match" the current zoom even
-    // though the dense layer was built empty at that time (no points
-    // existed yet). Resetting to null makes updateActiveLayer() treat
-    // this as a genuine mode change and actually populate it now.
-    denseMode = null;
-    labelMode = null;
-    updateActiveLayer(); // adds whichever layer matches the current zoom
   })
-  .catch(loadFailed);
+  .catch(err => console.error(err));
 
-// Explicit mode flags so we only ever rebuild the dense layer when one of
-// these actually flips (e.g. 11.75->12 or 17.75->18), not on every
-// fractional zoomend (12->12.25->12.5->...) which zoomSnap:0.25 produces
-// constantly. This was the single biggest source of unnecessary work on
-// every zoom step.
-let denseMode = null; // null forces the first call to always run
-let labelMode = null;
-
-function updateActiveLayer() {
-  const wantDense = map.getZoom() >= DENSE_ZOOM;
-  const wantLabels = map.getZoom() >= LABEL_ZOOM;
-
-  if (wantDense !== denseMode) {
-    denseMode = wantDense;
-    if (denseMode) {
-      if (map.hasLayer(clusterGroup)) map.removeLayer(clusterGroup);
-      labelMode = wantLabels; // adopt label state as part of this rebuild
-      rebuildDenseLayer();
-      if (!map.hasLayer(denseLayer)) map.addLayer(denseLayer);
-    } else {
-      if (map.hasLayer(denseLayer)) {
-        map.removeLayer(denseLayer);
-        denseLayer.clearLayers();
-        denseMarkers.clear();
-      }
-      if (!map.hasLayer(clusterGroup)) map.addLayer(clusterGroup);
-    }
-    return;
-  }
-
-  // Still in dense mode, but the label requirement itself changed
-  // (crossed LABEL_ZOOM in either direction) — rebuild just for that.
-  if (denseMode && wantLabels !== labelMode) {
-    labelMode = wantLabels;
-    rebuildDenseLayer();
-  }
-  // Any other zoomend (fractional step within the same mode) does nothing.
-}
-map.on('zoomend', updateActiveLayer);
-map.on('moveend', () => {
-  // Pure panning (zoom unchanged): cheap incremental add/remove only.
-  refreshDenseLayerIncremental();
-});
-
-// ---- Filter 0 User toggle ----
+// ---- Filter 0 User / Usage --------------------------------------------------
 const filterBtn = document.getElementById('filterBtn');
+const usageBtn = document.getElementById('usageBtn');
 const themeMeta = document.getElementById('themeColorMeta');
 
-// Red theme + red frame while either Filter 0 User or Usage is on.
 function applyRedTheme() {
   const red = filterOn || usageOn;
   document.documentElement.classList.toggle('filter-on', red);
   if (themeMeta) themeMeta.setAttribute('content', red ? '#d50000' : '#4a4a4a');
 }
-
-function applyFilter() {
-  applyRedTheme();
-  filterBtn.classList.toggle('active', filterOn);
-
-  // Clustered view (low zoom)
-  clusterGroup.clearLayers();
-  clusterGroup.addLayers(filterOn ? allClusterMarkers.filter(m => m._p.zero) : allClusterMarkers);
-  // Dense view (high zoom)
-  if (denseMode) rebuildDenseLayer();
-  // Close any open popup of a point that may now be hidden
-  map.closePopup();
-}
-
 filterBtn.addEventListener('click', () => {
   filterOn = !filterOn;
-  applyFilter();
-});
-
-// ---- Usage toggle ----
-const usageBtn = document.getElementById('usageBtn');
-function applyUsage() {
   applyRedTheme();
-  usageBtn.classList.toggle('active', usageOn);
-  allClusterMarkers.forEach(m => m.setIcon(getPointIcon(pointColor(m._p))));
-  // Re-add so the clustered view picks up the new icons
-  clusterGroup.clearLayers();
-  clusterGroup.addLayers(filterOn ? allClusterMarkers.filter(m => m._p.zero) : allClusterMarkers);
-  if (denseMode) rebuildDenseLayer();
-}
+  filterBtn.classList.toggle('active', filterOn);
+  applyLayerVisibility();
+  closePopup();
+});
 usageBtn.addEventListener('click', () => {
   usageOn = !usageOn;
-  applyUsage();
+  applyRedTheme();
+  usageBtn.classList.toggle('active', usageOn);
+  if (pointsReady) SETS.forEach(s => map.setPaintProperty(L_PT(s), 'circle-color', pointColorExpr()));
 });
 
+// ---- Measure-distance tool --------------------------------------------------
+const UNDO_ICON =
+  '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" ' +
+  'stroke-width="2" stroke-linecap="round" stroke-linejoin="round">' +
+  '<path d="M9 14 4 9l5-5"/><path d="M4 9h10.5a5.5 5.5 0 0 1 0 11H11"/></svg>';
+const MEASURE_ICON =
+  '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" ' +
+  'stroke-width="2" stroke-linecap="round" stroke-linejoin="round">' +
+  '<path d="M3 17 17 3l4 4L7 21z"/><path d="M7 13l2 2M10 10l2 2M13 7l2 2"/></svg>';
+const COMPASS_ICON =
+  '<svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" ' +
+  'stroke-width="2" stroke-linecap="round" stroke-linejoin="round">' +
+  '<circle cx="12" cy="12" r="9.5"/>' +
+  '<path d="M12 5 15.2 12h-6.4z" fill="currentColor"/><path d="M12 19 8.8 12h6.4z"/></svg>';
+
+let measuring = false;
+let measurePts = [];   // maplibregl.LngLat
+let measureMarks = []; // their draggable markers
+let measureTotal = 0;
+let measureBtn, measureOut, measureUndoBar;
+
+function ctrlButton(parent, title, icon) {
+  const b = document.createElement('button');
+  b.type = 'button';
+  b.className = 'ctrl-btn';
+  b.title = title;
+  b.setAttribute('aria-label', title);
+  b.innerHTML = icon;
+  parent.appendChild(b);
+  return b;
+}
+
+class MeasureControl {
+  onAdd() {
+    const wrap = document.createElement('div');
+    wrap.className = 'maplibregl-ctrl measure-wrap';
+    const bar = document.createElement('div');
+    bar.className = 'maplibregl-ctrl-group';
+    wrap.appendChild(bar);
+    measureBtn = ctrlButton(bar, 'Measure distance', MEASURE_ICON);
+    measureOut = document.createElement('div');
+    measureOut.className = 'measure-readout';
+    wrap.appendChild(measureOut);
+    measureUndoBar = document.createElement('div');
+    measureUndoBar.className = 'maplibregl-ctrl-group measure-undo';
+    wrap.appendChild(measureUndoBar);
+    const undoBtn = ctrlButton(measureUndoBar, 'Undo last point', UNDO_ICON);
+    measureBtn.addEventListener('click', toggleMeasure);
+    undoBtn.addEventListener('click', undoMeasurePoint);
+    return wrap;
+  }
+  onRemove() {}
+}
+
+function formatMeters(m) { return Math.round(m).toLocaleString('en-US') + ' m'; }
+
+function ensureMeasureLayers() {
+  if (map.getSource('measure')) return;
+  map.addSource('measure', { type: 'geojson', data: { type: 'FeatureCollection', features: [] } });
+  map.addLayer({ id: 'measure-casing', type: 'line', source: 'measure',
+    layout: { 'line-join': 'round', 'line-cap': 'round' },
+    paint: { 'line-color': '#000', 'line-width': 6, 'line-opacity': 0.55 } });
+  map.addLayer({ id: 'measure-line', type: 'line', source: 'measure',
+    layout: { 'line-join': 'round', 'line-cap': 'round' },
+    paint: { 'line-color': '#FFD400', 'line-width': 3 } });
+}
+
+function refreshMeasure() {
+  measureTotal = 0;
+  for (let k = 1; k < measurePts.length; k++) measureTotal += measurePts[k - 1].distanceTo(measurePts[k]);
+  const src = map.getSource('measure');
+  if (src) src.setData({ type: 'FeatureCollection', features: measurePts.length < 2 ? [] : [{
+    type: 'Feature', properties: {},
+    geometry: { type: 'LineString', coordinates: measurePts.map(p => [p.lng, p.lat]) }
+  }] });
+  measureOut.textContent = formatMeters(measureTotal);
+  measureUndoBar.style.display = measurePts.length ? 'block' : 'none';
+}
+
+function setTapZoomGestures(on) {
+  if (on) map.doubleClickZoom.enable(); else map.doubleClickZoom.disable();
+  const tdz = map.touchZoomRotate && map.touchZoomRotate._tapDragZoom;
+  if (tdz) { if (on) tdz.enable(); else tdz.disable(); }
+}
+
+function startMeasure() {
+  measuring = true;
+  ensureMeasureLayers();
+  measurePts = []; measureMarks = [];
+  refreshMeasure();
+  measureBtn.classList.add('active');
+  measureOut.style.display = 'block';
+  map.getContainer().classList.add('measuring');
+  closePopup();
+  setTapZoomGestures(false); // a double-tap would otherwise drop stray points
+}
+
+function stopMeasure() {
+  measuring = false;
+  measureMarks.forEach(m => m.remove());
+  measurePts = []; measureMarks = [];
+  refreshMeasure();
+  measureBtn.classList.remove('active');
+  measureOut.style.display = 'none';
+  map.getContainer().classList.remove('measuring');
+  setTapZoomGestures(true);
+}
+
+function toggleMeasure() { if (measuring) stopMeasure(); else startMeasure(); }
+
+// If the tap lands within ~14px of a FAT point (dense zoom), use its exact position.
+function snapToFat(lngLat) {
+  const fat = nearestFat(map.project(lngLat), 14);
+  return fat ? new maplibregl.LngLat(fat.lng, fat.lat) : lngLat;
+}
+
+function addMeasurePoint(lngLat) {
+  const ll = snapToFat(lngLat);
+  const el = document.createElement('div');
+  el.className = 'measure-pt';
+  el.innerHTML = '<div class="mp-dot"></div>';
+  const mk = new maplibregl.Marker({ element: el, draggable: true }).setLngLat(ll).addTo(map);
+  mk.on('dragstart', () => el.classList.add('dragging'));
+  mk.on('drag', () => {
+    const i = measureMarks.indexOf(mk);
+    if (i < 0) return;
+    measurePts[i] = mk.getLngLat();
+    refreshMeasure();
+  });
+  mk.on('dragend', () => {
+    el.classList.remove('dragging');
+    const i = measureMarks.indexOf(mk);
+    if (i < 0) return;
+    const snapped = snapToFat(mk.getLngLat());
+    mk.setLngLat(snapped);
+    measurePts[i] = snapped;
+    refreshMeasure();
+  });
+  measurePts.push(ll);
+  measureMarks.push(mk);
+  refreshMeasure();
+}
+
+function undoMeasurePoint() {
+  if (!measuring || !measurePts.length) return;
+  measurePts.pop();
+  measureMarks.pop().remove();
+  refreshMeasure();
+}
+
+// ---- Compass rotation -------------------------------------------------------
+let compassOn = false;
+let compassBusy = false;
+let compassBtn = null;
+let compassSvg = null;
+let compassEvt = null;
+let compassTarget = null;  // smoothed sensor heading (0-360)
+let compassShown = null;   // heading currently applied to the map
+let compassRaf = null;
+let compassWatchdog = null;
+
+function angDiff(a, b) { return ((b - a + 540) % 360) - 180; }
+
+function screenAngle() {
+  let a = 0;
+  if (window.screen && screen.orientation && typeof screen.orientation.angle === 'number') a = screen.orientation.angle;
+  else if (typeof window.orientation === 'number') a = window.orientation;
+  return ((a % 360) + 360) % 360;
+}
+
+function headingFromEuler(alpha, beta, gamma) {
+  const r = Math.PI / 180;
+  const a = alpha * r, b = beta * r, g = gamma * r;
+  const sa = Math.sin(a), ca = Math.cos(a);
+  const sb = Math.sin(b), cb = Math.cos(b);
+  const sg = Math.sin(g), cg = Math.cos(g);
+  let tx = -sa * cb, ty = ca * cb;
+  let bx = -(ca * sg + sa * sb * cg), by = ca * sb * cg - sa * sg;
+  const tl = Math.hypot(tx, ty) || 1, bl = Math.hypot(bx, by) || 1;
+  tx /= tl; ty /= tl; bx /= bl; by /= bl;
+  const w = Math.min(1, Math.max(0, (beta - 55) / 20));
+  const x = tx * (1 - w) + bx * w, y = ty * (1 - w) + by * w;
+  return (Math.atan2(x, y) * 180 / Math.PI + 360) % 360;
+}
+
+function onCompassEvent(e) {
+  let h = null;
+  if (typeof e.webkitCompassHeading === 'number' && !isNaN(e.webkitCompassHeading)) {
+    h = e.webkitCompassHeading;
+  } else if (e.alpha !== null && e.alpha !== undefined) {
+    if (compassEvt === 'deviceorientation' && e.absolute !== true) return;
+    h = headingFromEuler(e.alpha, e.beta || 0, e.gamma || 0);
+  }
+  if (h === null || isNaN(h)) return;
+  h = (h + screenAngle() + 360) % 360;
+  clearTimeout(compassWatchdog);
+  compassWatchdog = null;
+  compassTarget = compassTarget === null ? h : (compassTarget + angDiff(compassTarget, h) * 0.25 + 360) % 360;
+}
+
+// Runs every display frame (60 fps) while the compass is on: eases the map
+// towards the latest heading, so the rotation itself is perfectly smooth.
+// MapLibre's bearing = the compass direction shown at the top of the screen,
+// which is exactly the heading the person is facing.
+function compassFrame() {
+  if (!compassOn) return;
+  compassRaf = requestAnimationFrame(compassFrame);
+  if (compassTarget === null) return;
+  if (map.isEasing()) return; // don't interrupt a search/locate camera move
+  if (compassShown === null) compassShown = compassTarget;
+  const d = angDiff(compassShown, compassTarget);
+  if (Math.abs(d) < 0.3) return;
+  compassShown = (compassShown + d * 0.15 + 360) % 360;
+  map.setBearing(compassShown);
+  if (compassSvg) compassSvg.style.transform = 'rotate(' + (-compassShown) + 'deg)';
+}
+
+function disableCompass() {
+  compassOn = false;
+  if (compassEvt) { window.removeEventListener(compassEvt, onCompassEvent, true); compassEvt = null; }
+  cancelAnimationFrame(compassRaf); compassRaf = null;
+  clearTimeout(compassWatchdog); compassWatchdog = null;
+  compassTarget = null;
+  compassShown = null;
+  map.easeTo({ bearing: 0, duration: 300 });
+  if (compassSvg) compassSvg.style.transform = '';
+  if (compassBtn) compassBtn.classList.remove('active');
+}
+
+async function enableCompass() {
+  if (!('DeviceOrientationEvent' in window)) { showToast('Compass is not available on this device'); return; }
+  if (typeof DeviceOrientationEvent.requestPermission === 'function') {
+    compassBusy = true;
+    try {
+      const res = await DeviceOrientationEvent.requestPermission();
+      if (res !== 'granted') { showToast('Compass permission was denied'); return; }
+    } catch (err) {
+      showToast('Compass permission was denied');
+      return;
+    } finally {
+      compassBusy = false;
+    }
+  }
+  compassEvt = ('ondeviceorientationabsolute' in window) ? 'deviceorientationabsolute' : 'deviceorientation';
+  window.addEventListener(compassEvt, onCompassEvent, true);
+  compassOn = true;
+  compassRaf = requestAnimationFrame(compassFrame);
+  compassBtn.classList.add('active');
+  compassWatchdog = setTimeout(() => {
+    if (compassOn && compassTarget === null) {
+      disableCompass();
+      showToast('Compass is not available on this device');
+    }
+  }, 3000);
+}
+
+class CompassControl {
+  onAdd() {
+    const bar = document.createElement('div');
+    bar.className = 'maplibregl-ctrl maplibregl-ctrl-group';
+    compassBtn = ctrlButton(bar, 'Rotate map with compass', COMPASS_ICON);
+    compassSvg = compassBtn.firstChild;
+    compassBtn.addEventListener('click', () => {
+      if (compassBusy) return;
+      if (compassOn) disableCompass(); else enableCompass();
+    });
+    return bar;
+  }
+  onRemove() {}
+}
+map.addControl(new CompassControl(), 'top-right');
+map.addControl(new MeasureControl(), 'top-right'); // added after = sits below
+
+// ---- Long-press on empty map: show that spot's coordinates -----------------
+const LONG_PRESS_MS = 1000;
+const LONG_PRESS_POINT_THRESHOLD_PX = 25;
+const LONG_PRESS_MOVE_TOLERANCE_PX = 18;
+const COORD_POPUP_OPEN_GRACE_MS = 400;
+let longPressTimer = null;
+let longPressStartPx = null;
+
+function cancelLongPress() {
+  if (longPressTimer) { clearTimeout(longPressTimer); longPressTimer = null; }
+  longPressStartPx = null;
+}
+
+function startLongPress(pt) {
+  cancelLongPress();
+  if (measuring) return;
+  // Only looks at what's drawn under the finger - not a loop over 100k points.
+  if (nearestFeature(pt, LONG_PRESS_POINT_THRESHOLD_PX, true)) return;
+  longPressStartPx = pt;
+  longPressTimer = setTimeout(() => {
+    longPressTimer = null;
+    const ll = map.unproject(pt);
+    openPopup(ll, coordPopupContent(ll.lat, ll.lng), 4, true);
+  }, LONG_PRESS_MS);
+}
+
+// Mouse (desktop)
+map.on('mousedown', (e) => { if (e.originalEvent.button === 0) startLongPress(e.point); });
+map.on('mousemove', (e) => {
+  if (longPressTimer && longPressStartPx && dist2(e.point, longPressStartPx) > LONG_PRESS_MOVE_TOLERANCE_PX) cancelLongPress();
+});
+map.on('mouseup', cancelLongPress);
+map.on('zoomstart', cancelLongPress);
+
+// Touch (phones): built from raw touch events, independent of mouse emulation.
+(function enableTouchLongPress() {
+  const el = map.getCanvasContainer();
+  function pointFromTouch(t) {
+    const rect = el.getBoundingClientRect();
+    return new maplibregl.Point(t.clientX - rect.left, t.clientY - rect.top);
+  }
+  el.addEventListener('touchstart', (e) => {
+    if (e.touches.length !== 1) { cancelLongPress(); return; }
+    if (e.target.closest && e.target.closest('.measure-pt')) return;
+    startLongPress(pointFromTouch(e.touches[0]));
+  }, { passive: true });
+  el.addEventListener('touchmove', (e) => {
+    if (!longPressTimer || !longPressStartPx) return;
+    if (e.touches.length !== 1 || dist2(pointFromTouch(e.touches[0]), longPressStartPx) > LONG_PRESS_MOVE_TOLERANCE_PX) cancelLongPress();
+  }, { passive: true });
+  el.addEventListener('touchend', cancelLongPress, { passive: true });
+  el.addEventListener('touchcancel', cancelLongPress, { passive: true });
+})();
+
+// ---- Coordinate search marker ----------------------------------------------
+let coordMarker = null;
+let coordPopupHtml = '';
+function coordMarkerEl() {
+  const el = document.createElement('div');
+  el.className = 'coord-icon';
+  el.innerHTML =
+    '<svg viewBox="0 0 32 32" width="32" height="32" style="overflow:visible;display:block">' +
+    '<circle cx="16" cy="16" r="9" fill="none" stroke="#000" stroke-width="5"/>' +
+    '<line x1="16" y1="3" x2="16" y2="29" stroke="#000" stroke-width="5"/>' +
+    '<line x1="3" y1="16" x2="29" y2="16" stroke="#000" stroke-width="5"/>' +
+    '<circle cx="16" cy="16" r="9" fill="none" stroke="#FFD400" stroke-width="3"/>' +
+    '<line x1="16" y1="4" x2="16" y2="28" stroke="#FFD400" stroke-width="3"/>' +
+    '<line x1="4" y1="16" x2="28" y2="16" stroke="#FFD400" stroke-width="3"/>' +
+    '</svg>';
+  return el;
+}
+
+// ---- User location marker ---------------------------------------------------
+let userMarker = null;
+
+// ---- One click handler for everything --------------------------------------
+// Priority mirrors the old Leaflet stacking: your dot, then the searched
+// coordinate, then FAT points / clusters, then empty map.
+map.on('click', (e) => {
+  const t = e.originalEvent && e.originalEvent.target;
+  if (t && t.closest && t.closest('.measure-pt')) return; // tap on a measure dot
+
+  if (measuring) {
+    const cl = nearestFeature(e.point, 14, true);
+    if (cl && cl.properties.cluster) { zoomIntoCluster(cl); return; }
+    addMeasurePoint(e.lngLat);
+    return;
+  }
+
+  // The release that completed a long-press must not close its own popup.
+  if (currentPopup && popupIsCoord && Date.now() - popupOpenedAt < COORD_POPUP_OPEN_GRACE_MS) return;
+
+  if (userMarker && dist2(map.project(userMarker.getLngLat()), e.point) <= 12) {
+    openPopup(userMarker.getLngLat(), 'You are here', 10, false);
+    return;
+  }
+  if (coordMarker && dist2(map.project(coordMarker.getLngLat()), e.point) <= 16) {
+    const fat = nearestFat(e.point, 14);
+    if (fat) openFatPopup(fat);
+    else openPopup(coordMarker.getLngLat(), coordPopupHtml, 14, false);
+    return;
+  }
+
+  const f = nearestFeature(e.point, 14, true);
+  if (f) {
+    if (f.properties.cluster) zoomIntoCluster(f);
+    else { const p = pointByName[f.properties.n]; if (p) openFatPopup(p); }
+    return;
+  }
+  closePopup();
+});
+
+// Desktop: pointer cursor over points (checked at most once per frame).
+let hoverPending = false, hoverPt = null;
+map.on('mousemove', (e) => {
+  hoverPt = e.point;
+  if (hoverPending) return;
+  hoverPending = true;
+  requestAnimationFrame(() => {
+    hoverPending = false;
+    if (!hoverPt) return;
+    const over = !measuring && nearestFeature(hoverPt, 10, true);
+    map.getCanvas().style.cursor = over ? 'pointer' : '';
+  });
+});
+
+// ---- Search -----------------------------------------------------------------
 const input = document.getElementById('searchInput');
 const suggBox = document.getElementById('suggestions');
 const clearSearchBtn = document.getElementById('clearSearchBtn');
 
-function updateClearSearchBtn() {
-  clearSearchBtn.classList.toggle('visible', input.value.length > 0);
-}
+function updateClearSearchBtn() { clearSearchBtn.classList.toggle('visible', input.value.length > 0); }
 
 clearSearchBtn.addEventListener('click', () => {
   input.value = '';
@@ -1355,41 +990,11 @@ clearSearchBtn.addEventListener('click', () => {
 });
 
 function renderSuggestions(matches) {
-  if (matches.length === 0) {
-    suggBox.style.display = 'none';
-    return;
-  }
-  suggBox.innerHTML = matches.slice(0, 25).map(p =>
-    '<div data-name="' + p.n + '">' + p.n + '</div>'
-  ).join('');
+  if (matches.length === 0) { suggBox.style.display = 'none'; return; }
+  suggBox.innerHTML = matches.slice(0, 25).map(p => '<div data-name="' + p.n + '">' + p.n + '</div>').join('');
   suggBox.style.display = 'block';
 }
 
-// The box now recognizes three input shapes and reacts the instant the
-// typed/pasted text matches one of them - no Enter needed:
-//   1. FAT code    - 19 characters total, exactly 3 "-" (e.g. 722-R01-FDT01-FAT17)
-//   2. Decimal Degrees - only digits/spaces/"."/"," , with exactly two "."
-//      and two numbers (comma or space between them), e.g. "36.868, 42.945726"
-//   3. DMS         - contains exactly two °, two ', two " and both N and E,
-//      e.g. 36°52'06.4"N 42°56'45.0"E
-// Because each shape needs different punctuation, the input is no longer
-// stripped down to only A-Z0-9- : every character any of the three formats
-// uses is kept (letters/digits/dash, or digits/./,/space, or °'"NE), and only
-// characters none of them use (other symbols, other scripts) are dropped.
-// Detection then looks at the shape of the cleaned text, so a coordinate
-// that's still being typed is never mistaken for a FAT-code prefix and vice
-// versa. Letters are still forced to CAPITAL (harmless for digits/symbols,
-// and N/E need to be uppercase anyway). The caret position is preserved so
-// editing in the middle of the text doesn't jump to the end.
-//
-// A space is only ever meaningful once, as the separator between the two
-// numbers of a Decimal Degrees pair (e.g. "36.868 42.945"). So a space
-// survives ONLY when the rest of the text (ignoring spaces) is digits and
-// "." only - no letters at all - AND has at least one digit AND at least
-// one "." . In every other case (no digit yet, no "." yet, or any letter
-// present, e.g. while typing a FAT code or DMS) every space is stripped.
-// Even when allowed, at most one space total is kept - typing a second one
-// is simply ignored rather than inserting it.
 const SEARCH_CODE_LENGTH = 19;
 
 function cleanSearchText(s) {
@@ -1417,11 +1022,6 @@ function sanitizeSearchInput() {
   return clean;
 }
 
-// North Iraq means latitude (~36) is always the smaller of the two numbers
-// and longitude (~42) the larger, whichever order the user typed them in -
-// so the smaller value is always taken as latitude, the larger as longitude.
-// This both auto-detects which is which AND silently corrects a swapped
-// entry.
 function tryDecimalSearch(q) {
   if (!/^[0-9.,\s]+$/.test(q)) return false;
   if ((q.match(/\./g) || []).length !== 2) return false;
@@ -1439,7 +1039,6 @@ function tryDMSSearch(q) {
   if ((q.match(/'/g) || []).length !== 2) return false;
   if ((q.match(/"/g) || []).length !== 2) return false;
   if (!q.includes('N') || !q.includes('E')) return false;
-
   const re = /(\d+(?:\.\d+)?)\s*°\s*(\d+(?:\.\d+)?)\s*'\s*(\d+(?:\.\d+)?)\s*"/g;
   const values = [];
   let m;
@@ -1447,46 +1046,25 @@ function tryDMSSearch(q) {
     values.push(parseFloat(m[1]) + parseFloat(m[2]) / 60 + parseFloat(m[3]) / 3600);
   }
   if (values.length !== 2) return false;
-
   showCoordResult(Math.min(values[0], values[1]), Math.max(values[0], values[1]));
   return true;
 }
 
-// ---- FAT-code auto-advance (PREFIX-R0X-FDTXX-FATXX, e.g. 108-R01-FDT11-FAT99) ----
-// The dashes and the literal "R0" / "FDT" / "FAT" text are inserted
-// automatically as the person types forward, so they only ever type the
-// meaningful digits/letters: 3 chars, then 1 digit, then 2 digits, then 2
-// digits. This only ever runs while characters are being ADDED - Backspace
-// and Delete are left completely alone (plain, default, one character at a
-// time), so removing text never triggers any extra insertion or jumping.
+// ---- FAT-code auto-advance (PREFIX-R0X-FDTXX-FATXX) ----
 const FAT_SEGMENTS = [
-  { literal: '', len: 3 },     // prefix, e.g. "108" / "MLT"
-  { literal: 'R0', len: 1 },   // -> "R01"
-  // "FDT01"-"FDT09" (leading 0 auto-filled, so only 1 digit needs typing) is
-  // the common case. altLiteral/altLen is the fallback for FDT10-FDT99: if
-  // the person deletes the auto-filled "0" and types "FDT" + two digits
-  // directly, that raw 2-digit shape is recognized too, and auto-advance to
-  // "-FAT" resumes as soon as both digits are in - rather than giving up on
-  // auto-advance for the rest of the code.
+  { literal: '', len: 3 },
+  { literal: 'R0', len: 1 },
   { literal: 'FDT0', len: 1, altLiteral: 'FDT', altLen: 2 },
-  { literal: 'FAT', len: 2 }   // -> "FAT99"
+  { literal: 'FAT', len: 2 }
 ];
-const FAT_FREE_LEN = FAT_SEGMENTS.reduce((n, s) => n + s.len, 0); // 7
+const FAT_FREE_LEN = FAT_SEGMENTS.reduce((n, s) => n + s.len, 0);
 
-// True only while the text is unambiguously FAT-code-shaped - i.e. it has
-// none of the characters that only a coordinate search uses. Decimal/DMS
-// input in progress must never be touched by this.
-function looksLikeFatInProgress(text) {
-  return !/[.,°'"]/.test(text);
-}
+function looksLikeFatInProgress(text) { return !/[.,°'"]/.test(text); }
 
-// Pull the meaningful typed characters back out of a (possibly already
-// auto-formatted) FAT-shaped string, so buildFatSkeleton can re-render it
-// with the next literal appended.
 function parseFatFree(text) {
   const parts = text.split('-');
   let free = '';
-  let fdtVariant = 'auto0'; // which FDT shape matched - see FAT_SEGMENTS above
+  let fdtVariant = 'auto0';
   for (let i = 0; i < FAT_SEGMENTS.length && i < parts.length; i++) {
     const seg = FAT_SEGMENTS[i];
     let part = parts[i];
@@ -1497,31 +1075,16 @@ function parseFatFree(text) {
         part = part.slice(seg.altLiteral.length);
         fdtVariant = 'raw';
       } else {
-        // The expected literal isn't there anymore - the person is typing
-        // something auto-advance's two known FDT shapes don't cover (e.g.
-        // they edited an already-formatted code by hand elsewhere). Signal
-        // "give up reformatting" (null) rather than guessing: patching
-        // mismatched text back into the segment structure is what used to
-        // misplace characters into the wrong segment (e.g. turning "FDT1"
-        // into "FDT0F"). From here on the person's own typing is left
-        // exactly as they typed it.
         return null;
       }
     }
     free += part;
   }
   if (parts.length > FAT_SEGMENTS.length) free += parts.slice(FAT_SEGMENTS.length).join('');
-  const maxLen = fdtVariant === 'raw' ? FAT_FREE_LEN + 1 : FAT_FREE_LEN; // raw FDT needs one extra digit slot
+  const maxLen = fdtVariant === 'raw' ? FAT_FREE_LEN + 1 : FAT_FREE_LEN;
   return { free: free.slice(0, maxLen), fdtVariant };
 }
 
-// Forward of parseFatFree: render the free characters typed so far as the
-// full "PREFIX-R0X-FDTXX-FATXX" skeleton, stopping as soon as a segment
-// isn't fully typed yet (so it never invents digits the person hasn't
-// entered) - OR as soon as what's been typed can no longer match any real
-// FAT code in the data, in which case auto-inserting the next "-FDT"/"-FAT"
-// would be pointless (e.g. nothing starts with "7FF", or nothing starts
-// with "722-R01-FDT99"): the text is left exactly as typed instead.
 function buildFatSkeleton(parsed) {
   const { free, fdtVariant } = parsed;
   const segs = fdtVariant === 'raw'
@@ -1535,7 +1098,6 @@ function buildFatSkeleton(parsed) {
     i += slice.length;
     out.push(seg.literal + slice);
     if (slice.length < seg.len) break;
-
     if (s < segs.length - 1) {
       const soFar = out.join('-');
       if (!allPoints.some(p => p.search.startsWith(soFar))) break;
@@ -1547,7 +1109,7 @@ function buildFatSkeleton(parsed) {
 function autoFormatFat(text) {
   if (!looksLikeFatInProgress(text)) return text;
   const parsed = parseFatFree(text);
-  if (parsed === null) return text; // give up reformatting; see parseFatFree
+  if (parsed === null) return text;
   return buildFatSkeleton(parsed);
 }
 
@@ -1558,39 +1120,20 @@ function handleSearchInput(e) {
   if (tryDMSSearch(q)) return;
   if (tryDecimalSearch(q)) return;
 
-  // A complete, exact FAT code (19 characters, exactly 3 "-") is checked
-  // BEFORE auto-format runs, and jumped to immediately if found - skipping
-  // auto-format entirely. auto-format assumes an in-progress code being
-  // typed forward one character at a time (where FDT/FAT are built up as
-  // "FDT0" + one more digit); a pasted - or fast-typed - code that's already
-  // complete doesn't match that shape when its FDT/FAT number is 10-19 (no
-  // leading 0), which corrupted it (e.g. "FDT10" becoming "FDT0F"). Checking
-  // the complete code first avoids ever feeding a finished code through that
-  // logic.
   const dashCount = (q.match(/-/g) || []).length;
   if (q.length === SEARCH_CODE_LENGTH && dashCount === 3) {
     const exact = allPoints.find(p => p.search === q);
-    if (exact) {
-      goToPoint(exact.n);
-      return;
-    }
+    if (exact) { goToPoint(exact.n); return; }
   }
 
-  // Only auto-advance while adding characters. Backspace/Delete (and
-  // cutting a selection) are deliberately left as plain, ordinary deletion
-  // with no extra behavior.
   const isDeleting = !!e && typeof e.inputType === 'string' && e.inputType.indexOf('delete') === 0;
   if (!isDeleting) {
     const formatted = autoFormatFat(q);
-    if (formatted !== q) {
-      q = formatted;
-      input.value = q; // caret lands at the end, which is what forward typing wants
-    }
+    if (formatted !== q) { q = formatted; input.value = q; }
   }
 
   if (q.length < 1) { suggBox.style.display = 'none'; return; }
-  const matches = allPoints.filter(p => p.search.startsWith(q));
-  renderSuggestions(matches);
+  renderSuggestions(allPoints.filter(p => p.search.startsWith(q)));
 }
 
 input.addEventListener('input', handleSearchInput);
@@ -1611,127 +1154,66 @@ input.addEventListener('keydown', (e) => {
   }
 });
 
-// Where the found FAT appears vertically on the map: 0.3 = 30% down from the
-// top edge (70% left below it). Leaves room for the mobile keyboard, which
-// covers the lower part of the screen while typing in the search box.
+// Found item lands 30% down from the top (room for the phone keyboard).
 const FAT_SCREEN_Y_RATIO = 0.3;
+let userSearched = false;
 
 function goToPoint(name) {
   const p = pointByName[name];
   if (!p) return;
+  userSearched = true;
   suggBox.style.display = 'none';
   input.value = name;
   updateClearSearchBtn();
-
-  // setView puts the target at the map's center (50%). To make the FAT land
-  // at 30% instead, aim the map center below the FAT by the 20% difference.
-  const zoom = 19;
-  const size = map.getSize();
-  const centerPx = map.project([p.lat, p.lng], zoom)
-    .add([0, size.y * (0.5 - FAT_SCREEN_Y_RATIO)]);
-  map.setView(map.unproject(centerPx, zoom), zoom, { animate: true });
-
-  // autoPan:false - by default Leaflet nudges the map to fit the popup on
-  // screen, which would push the FAT away from the position set above (and
-  // it fought with the setView animation). The popup opens above the point
-  // and fits fine inside the map, so no nudging is needed.
-  L.popup({ autoPan: false })
-    .setLatLng([p.lat, p.lng])
-    .setContent(popupContent(p))
-    .openOn(map);
+  const h = map.getContainer().clientHeight;
+  moveTo(p.lng, p.lat, 18, -h * (0.5 - FAT_SCREEN_Y_RATIO));
+  openFatPopup(p);
 }
-
-// ---- Coordinate search result (Decimal Degrees / DMS) ----
-// A yellow circle-with-crosshair, deliberately unlike every other marker on
-// the map (blue FAT dots, gray cluster dots, black user dot), so a
-// coordinate you searched for is never mistaken for a real FAT point. A
-// single marker is reused and just moved for each new search.
-const coordIcon = L.divIcon({
-  className: 'coord-icon',
-  html:
-    '<svg viewBox="0 0 32 32" width="32" height="32" style="overflow:visible">' +
-    '<circle cx="16" cy="16" r="9" fill="none" stroke="#000" stroke-width="5"/>' +
-    '<line x1="16" y1="3" x2="16" y2="29" stroke="#000" stroke-width="5"/>' +
-    '<line x1="3" y1="16" x2="29" y2="16" stroke="#000" stroke-width="5"/>' +
-    '<circle cx="16" cy="16" r="9" fill="none" stroke="#FFD400" stroke-width="3"/>' +
-    '<line x1="16" y1="4" x2="16" y2="28" stroke="#FFD400" stroke-width="3"/>' +
-    '<line x1="4" y1="16" x2="28" y2="16" stroke="#FFD400" stroke-width="3"/>' +
-    '</svg>',
-  iconSize: [32, 32],
-  iconAnchor: [16, 16]
-});
-let coordMarker = null;
 
 function showCoordResult(lat, lng) {
+  userSearched = true;
   suggBox.style.display = 'none';
-
-  const content = lat.toFixed(6) + ', ' + lng.toFixed(6) + '<br>' +
+  coordPopupHtml = lat.toFixed(6) + ', ' + lng.toFixed(6) + '<br>' +
     '<a href="https://www.google.com/maps?q=' + lat + ',' + lng + '" target="_blank">Open in Google Maps</a>';
-
   if (!coordMarker) {
-    coordMarker = L.marker([lat, lng], { icon: coordIcon, zIndexOffset: 950 }).addTo(map);
+    coordMarker = new maplibregl.Marker({ element: coordMarkerEl() }).setLngLat([lng, lat]).addTo(map);
   } else {
-    coordMarker.setLatLng([lat, lng]);
+    coordMarker.setLngLat([lng, lat]);
   }
-  coordMarker.unbindPopup().bindPopup(content, { autoPan: false });
-
-  const zoom = 17;
-  const size = map.getSize();
-  const centerPx = map.project([lat, lng], zoom)
-    .add([0, size.y * (0.5 - FAT_SCREEN_Y_RATIO)]);
-  map.setView(map.unproject(centerPx, zoom), zoom, { animate: true });
-  // Popup is bound but not opened - it only shows when the user taps the
-  // marker, unlike a FAT-code search which opens its popup right away.
+  const h = map.getContainer().clientHeight;
+  moveTo(lng, lat, 16, -h * (0.5 - FAT_SCREEN_Y_RATIO));
 }
 
-// ---- Layer switcher (Google Satellite / Esri Satellite / Street) ----
+// ---- Layer switcher + automatic basemap fallback ---------------------------
 const layerBtn = document.getElementById('layerBtn');
 const layerMenu = document.getElementById('layerMenu');
-let activeBaseLayer = null;
-let activeKey = null;
-let userKey = 'google'; // the basemap the user wants (default, or last manual choice)
+let activeKey = 'google';
+let userKey = 'google';
 
-// ---- Automatic basemap fallback ---------------------------------------
-// How it decides (so it does not switch by mistake):
-//  1. Tile successes/errors of the ACTIVE basemap are tracked in a sliding
-//     time window (not "N errors in a row"), so partial blocking / rate
-//     limiting (some tiles load, many fail) is detected too.
-//  2. When the error rate looks bad, a small probe tile (zoom <= 10, at the
-//     map centre) is requested from the active provider AND from the
-//     providers after it, in parallel.
-//       - Active probe OK: Esri at zoom >= GAP_ZOOM -> just missing imagery
-//         (rural 404s), no switch. Any other case needs a very high error
-//         rate (DEGRADED_*) = partial blocking / rate limiting -> switch.
-//       - Nothing reachable at all           -> device/network problem. No switch.
-//       - Active dead (or badly degraded) and a fallback is alive -> switch.
-//  3. While running on a fallback, the preferred provider is re-tested every
-//     RECOVERY_INTERVAL_MS (and right when the device comes back online), at
-//     the zoom level the user is currently on, and the map goes back to it
-//     as soon as it works there.
-const WINDOW_MS = 15000;           // sliding window for tile statistics
-const ERR_MIN = 5;                 // min errors in window before verifying
-const ERR_RATIO = 0.5;             // ...and at least this share of tiles failing
-const DEGRADED_ERR_MIN = 8;        // stricter limit if the probe tile still loads
+const WINDOW_MS = 15000;
+const ERR_MIN = 5;
+const ERR_RATIO = 0.5;
+const DEGRADED_ERR_MIN = 8;
 const DEGRADED_RATIO = 0.7;
-const GAP_ZOOM = 17;               // from here, Esri errors are treated as "no imagery"
-const CHECK_COOLDOWN_MS = 15000;   // min time between two verifications
-const PROBE_TIMEOUT_MS = 5000;
-const RECOVERY_INTERVAL_MS = 10 * 60 * 1000; // try to return to the preferred one
+const GAP_ZOOM = 17;  // tile zoom
+const CHECK_COOLDOWN_MS = 15000;
+// Generous on purpose: on a slow connection a tile can take several seconds
+// and that must not be mistaken for the provider being down.
+const PROBE_TIMEOUT_MS = 12000;
+const RECOVERY_INTERVAL_MS = 10 * 60 * 1000;
 
-const tileEvents = [];             // { t, ok } for the active basemap
+const tileEvents = [];
 let checking = false;
 let lastCheckAt = 0;
 
-// -- probe: load ONE small tile from a provider and report if it is valid --
 function probeTile(key, lat, lng, z) {
   const p = PROVIDERS[key];
   const n = Math.pow(2, z);
   const x = Math.floor((lng + 180) / 360 * n);
   const latR = lat * Math.PI / 180;
   const y = Math.floor((1 - Math.log(Math.tan(latR) + 1 / Math.cos(latR)) / Math.PI) / 2 * n);
-  let url = p.url.replace('{s}', p.subdomains[0])
-                 .replace('{x}', x).replace('{y}', y).replace('{z}', z);
-  if (p.bust) url += (url.indexOf('?') >= 0 ? '&' : '?') + '_probe=' + Date.now(); // bypass browser cache
+  let url = p.url.replace('{s}', p.subdomains[0]).replace('{x}', x).replace('{y}', y).replace('{z}', z);
+  if (p.bust) url += (url.indexOf('?') >= 0 ? '&' : '?') + '_probe=' + Date.now();
   return new Promise(resolve => {
     const img = new Image();
     let done = false;
@@ -1744,7 +1226,6 @@ function probeTile(key, lat, lng, z) {
       resolve(ok);
     };
     timer = setTimeout(() => finish(false), PROBE_TIMEOUT_MS);
-    // a real tile is 256x256; anything else (error page, placeholder) = not OK
     img.onload = () => finish(img.naturalWidth === 256 && img.naturalHeight === 256);
     img.onerror = () => finish(false);
     img.src = url;
@@ -1753,18 +1234,15 @@ function probeTile(key, lat, lng, z) {
 
 function probeCenter() {
   const c = map.getCenter().wrap();
-  return { lat: c.lat, lng: c.lng, z: Math.max(2, Math.min(10, Math.round(map.getZoom()))) };
+  return { lat: c.lat, lng: c.lng, z: Math.max(2, Math.min(10, Math.round(TILE_Z()))) };
 }
 
 function setBaseLayer(key) {
-  const newLayer = baseLayers[key];
-  if (!newLayer || newLayer === activeBaseLayer) return;
-  if (activeBaseLayer) map.removeLayer(activeBaseLayer);
-  map.addLayer(newLayer);
-  activeBaseLayer = newLayer;
+  if (!PROVIDERS[key]) return;
+  FALLBACK_ORDER.forEach(k => map.setLayoutProperty('bm-' + k, 'visibility', k === key ? 'visible' : 'none'));
   activeKey = key;
   tileEvents.length = 0;
-  lastCheckAt = 0; // new basemap: it may fail over right away, no cooldown
+  lastCheckAt = 0;
   layerMenu.querySelectorAll('div[data-layer]').forEach(d => {
     d.classList.toggle('selected', d.getAttribute('data-layer') === key);
   });
@@ -1778,11 +1256,6 @@ function currentStats() {
   return { err: err, total: tileEvents.length };
 }
 
-function recordTile(ok) {
-  tileEvents.push({ t: Date.now(), ok: ok });
-  return ok ? null : currentStats();
-}
-
 async function verifyAndMaybeSwitch() {
   if (checking) return;
   checking = true;
@@ -1791,21 +1264,17 @@ async function verifyAndMaybeSwitch() {
     if (navigator.onLine === false) return;
     const failing = activeKey;
     const rest = FALLBACK_ORDER.slice(FALLBACK_ORDER.indexOf(failing) + 1);
-    if (!rest.length) return;                       // already on the last fallback
+    if (!rest.length) return;
     const pc = probeCenter();
     const results = await Promise.all([failing].concat(rest).map(k => probeTile(k, pc.lat, pc.lng, pc.z)));
-    if (activeKey !== failing) return;              // user changed basemap meanwhile
-    const activeOk = results[0];
-    if (activeOk) {
-      // Provider answers the small probe. Either imagery is just missing at high
-      // zoom (only possible for gap-prone providers such as Esri), or it is
-      // partially blocked / rate limited at the zoom the user is really using.
-      if (PROVIDERS[failing].gapProne && map.getZoom() >= GAP_ZOOM) return;
-      const now = currentStats();                   // fresh numbers: more tiles arrived during the probe
+    if (activeKey !== failing) return;
+    if (results[0]) {
+      if (PROVIDERS[failing].gapProne && TILE_Z() >= GAP_ZOOM) return;
+      const now = currentStats();
       if (now.err < DEGRADED_ERR_MIN || now.err / now.total < DEGRADED_RATIO) return;
     }
     const idx = results.slice(1).indexOf(true);
-    if (idx < 0) return;                            // nothing reachable: network problem, keep as is
+    if (idx < 0) return;
     const next = rest[idx];
     setBaseLayer(next);
     showToast(PROVIDERS[failing].label + ' unavailable - switched to ' + PROVIDERS[next].label);
@@ -1814,37 +1283,34 @@ async function verifyAndMaybeSwitch() {
   }
 }
 
-Object.keys(baseLayers).forEach(key => {
-  const layer = baseLayers[key];
-  layer.on('tileload', () => {
-    if (key !== activeKey) return;                  // ignore late events from a removed layer
-    recordTile(true);
-  });
-  layer.on('tileerror', () => {
-    if (key !== activeKey) return;
-    const st = recordTile(false);
-    if (!st || checking) return;
-    if (Date.now() - lastCheckAt < CHECK_COOLDOWN_MS) return;
-    if (st.err >= ERR_MIN && st.err / st.total >= ERR_RATIO) verifyAndMaybeSwitch();
-  });
+// MapLibre reports every loaded tile as a 'data' event and every failed one
+// as an 'error' event (404 = "no imagery here" is NOT reported as an error).
+map.on('data', (e) => {
+  if (!e.tile || e.sourceId !== 'bm-' + activeKey) return;
+  tileEvents.push({ t: Date.now(), ok: true });
+});
+map.on('error', (e) => {
+  if (!e.sourceId || !e.sourceId.startsWith('bm-')) { if (e.error) console.error(e.error); return; }
+  if (e.sourceId !== 'bm-' + activeKey) return;
+  tileEvents.push({ t: Date.now(), ok: false });
+  if (checking || Date.now() - lastCheckAt < CHECK_COOLDOWN_MS) return;
+  const st = currentStats();
+  if (st.err >= ERR_MIN && st.err / st.total >= ERR_RATIO) verifyAndMaybeSwitch();
 });
 
-// Go back to the preferred basemap when running on a fallback and it works again.
-// The probe uses the zoom level the user is on now (capped to what the provider
-// has), so the map never returns to a provider that still fails at that zoom.
 async function tryRecoverPreferred() {
   if (checking || document.hidden || navigator.onLine === false) return;
   const i = FALLBACK_ORDER.indexOf(userKey);
   const j = FALLBACK_ORDER.indexOf(activeKey);
-  if (i < 0 || j < 0 || i >= j) return;             // already on the preferred one
+  if (i < 0 || j < 0 || i >= j) return;
   checking = true;
   try {
-    const cands = FALLBACK_ORDER.slice(i, j);       // preferred ... just before the active one
+    const cands = FALLBACK_ORDER.slice(i, j);
     const c = map.getCenter().wrap();
-    const zNow = Math.max(2, Math.round(map.getZoom()));
+    const zNow = Math.max(2, Math.round(TILE_Z()));
     const res = await Promise.all(cands.map(k =>
       probeTile(k, c.lat, c.lng, Math.min(zNow, PROVIDERS[k].maxNativeZoom))));
-    if (activeKey !== FALLBACK_ORDER[j]) return;    // user changed basemap meanwhile
+    if (activeKey !== FALLBACK_ORDER[j]) return;
     const idx = res.indexOf(true);
     if (idx < 0) return;
     const back = cands[idx];
@@ -1857,39 +1323,26 @@ async function tryRecoverPreferred() {
 setInterval(tryRecoverPreferred, RECOVERY_INTERVAL_MS);
 window.addEventListener('online', tryRecoverPreferred);
 
-// Startup: always begin with the preferred basemap (nothing is remembered between
-// visits, so a short network glitch can never keep Google disabled afterwards).
-setBaseLayer(userKey);
-
 layerBtn.addEventListener('click', (e) => {
   e.stopPropagation();
   layerMenu.classList.toggle('open');
 });
-
 layerMenu.addEventListener('click', (e) => {
   const el = e.target.closest('div[data-layer]');
   if (!el) return;
   const key = el.getAttribute('data-layer');
-  if (baseLayers[key]) {
-    userKey = key;                // manual choice becomes the preferred basemap
-    setBaseLayer(key);
+  if (PROVIDERS[key]) {
+    userKey = key;
+    if (map.isStyleLoaded()) setBaseLayer(key); else mapLoaded.then(() => setBaseLayer(key));
   }
   layerMenu.classList.remove('open');
 });
-
 document.addEventListener('click', (e) => {
-  if (!document.getElementById('searchBox').contains(e.target)) {
-    suggBox.style.display = 'none';
-  }
-  if (!layerMenu.contains(e.target) && e.target !== layerBtn) {
-    layerMenu.classList.remove('open');
-  }
+  if (!document.getElementById('searchBox').contains(e.target)) suggBox.style.display = 'none';
+  if (!layerMenu.contains(e.target) && e.target !== layerBtn) layerMenu.classList.remove('open');
 });
 
-// ---- Visit log (Google Sheets) -------------------------------------------
-// Each device gets a random ID kept in localStorage. Once per page open, the
-// ID + the first location fix (decimal degrees) are sent to a Google Apps
-// Script web app, which keeps ONE row per device in the sheet.
+// ---- Visit log (Google Sheets) ---------------------------------------------
 const VISIT_LOG_URL = 'https://script.google.com/macros/s/AKfycbz3U-pu2BFU0HWQqH-XfU_xydoLyTfMCcNjPVCLoHbVp6V1TXwJaaVjOUWtvNx2GIFs/exec';
 let visitLogged = false;
 
@@ -1908,31 +1361,25 @@ function getDeviceId() {
   }
 }
 
-// Accuracy required before sending, relaxed in steps as time passes.
-// The clock starts when the FIRST location fix arrives (not at page load),
-// so time spent on the permission prompt or a slow first fix is not lost.
-// A fix is sent as soon as its accuracy is within the limit of the current step.
 const ACCURACY_STEPS = [
-  { until: 2000,  max: 25   },  //  0-2 s  : error 25 m or less
-  { until: 4000,  max: 50   },  //  2-4 s  : error 50 m or less
-  { until: 6000,  max: 80   },  //  4-6 s  : error 80 m or less
-  { until: 8000,  max: 150  },  //  6-8 s  : error 150 m or less
-  { until: 10000, max: 250  },  //  8-10 s : error 250 m or less
-  { until: 12000, max: 1000 }   // 10-12 s : error 1000 m or less
+  { until: 2000,  max: 25   },
+  { until: 4000,  max: 50   },
+  { until: 6000,  max: 80   },
+  { until: 8000,  max: 150  },
+  { until: 10000, max: 250  },
+  { until: 12000, max: 1000 }
 ];
-const MAX_WAIT_MS = 12000;      // after the first fix: give up on coordinates after this
-const NO_FIX_MAX_WAIT_MS = 30000; // if no fix ever arrives: log the device ID only after this
+const MAX_WAIT_MS = 12000;
+const NO_FIX_MAX_WAIT_MS = 30000;
 const logStart = Date.now();
-let firstFixTime = null;        // set when the first fix arrives
+let firstFixTime = null;
 let bestFix = null;
 
 function allowedAccuracy() {
   if (firstFixTime === null) return 0;
   const t = Date.now() - firstFixTime;
-  for (const step of ACCURACY_STEPS) {
-    if (t < step.until) return step.max;
-  }
-  return 0; // past the last step: nothing qualifies
+  for (const step of ACCURACY_STEPS) if (t < step.until) return step.max;
+  return 0;
 }
 
 function logVisitOnce(lat, lng, accuracy) {
@@ -1946,34 +1393,24 @@ function logVisitOnce(lat, lng, accuracy) {
     accuracy: hasLoc && isFinite(accuracy) ? Math.round(accuracy) : ''
   });
   try {
-    // text/plain + no-cors = no preflight, works from any static site.
     fetch(VISIT_LOG_URL, { method: 'POST', mode: 'no-cors', keepalive: true,
       headers: { 'Content-Type': 'text/plain;charset=utf-8' }, body: body }).catch(() => {});
   } catch (e) {}
 }
 
-// Send the best fix so far if it meets the limit of the current time step.
 function checkAndLog() {
   if (visitLogged || !bestFix) return;
-  if (bestFix.accuracy <= allowedAccuracy()) {
-    logVisitOnce(bestFix.lat, bestFix.lng, bestFix.accuracy);
-  }
+  if (bestFix.accuracy <= allowedAccuracy()) logVisitOnce(bestFix.lat, bestFix.lng, bestFix.accuracy);
 }
 
-// Called on every location fix: keep the most accurate one, then check it.
 function considerForLog(pos) {
   if (visitLogged) return;
   const c = pos.coords;
   if (firstFixTime === null) firstFixTime = Date.now();
-  if (!bestFix || c.accuracy < bestFix.accuracy) {
-    bestFix = { lat: c.latitude, lng: c.longitude, accuracy: c.accuracy };
-  }
+  if (!bestFix || c.accuracy < bestFix.accuracy) bestFix = { lat: c.latitude, lng: c.longitude, accuracy: c.accuracy };
   checkAndLog();
 }
 
-// Re-check twice a second, because the limit loosens over time even when no
-// new fix arrives. After MAX_WAIT_MS with nothing accurate enough, only the
-// device ID is logged (empty lat/lng) so the visit is still counted.
 const logTimer = setInterval(() => {
   if (visitLogged) { clearInterval(logTimer); return; }
   const noFixTooLong = firstFixTime === null && Date.now() - logStart >= NO_FIX_MAX_WAIT_MS;
@@ -1986,21 +1423,18 @@ const logTimer = setInterval(() => {
   checkAndLog();
 }, 500);
 
-// ---- Locate me ----
+// ---- Locate me ----------------------------------------------------------------
 const locateBtn = document.getElementById('locateBtn');
-let userMarker = null;
-let watchId = null;
-
-const userIcon = L.divIcon({ className: 'user-icon', html: '<div class="user-dot"></div>', iconSize: [16,16] });
-
 let lastFixTime = 0;
 
 function updateUserMarker(lat, lng) {
   if (!userMarker) {
-    userMarker = L.marker([lat, lng], { icon: userIcon, zIndexOffset: 1000 }).addTo(map);
-    userMarker.bindPopup('You are here');
+    const el = document.createElement('div');
+    el.className = 'user-icon';
+    el.innerHTML = '<div class="user-dot"></div>';
+    userMarker = new maplibregl.Marker({ element: el }).setLngLat([lng, lat]).addTo(map);
   } else {
-    userMarker.setLatLng([lat, lng]);
+    userMarker.setLngLat([lng, lat]);
   }
   lastFixTime = Date.now();
 }
@@ -2010,7 +1444,7 @@ function onLocationFound(pos, recenter) {
   const lng = pos.coords.longitude;
   updateUserMarker(lat, lng);
   considerForLog(pos);
-  if (recenter) map.setView([lat, lng], 17, { animate: true });
+  if (recenter) moveTo(lng, lat, 16, 0);
   locateBtn.classList.remove('active');
 }
 
@@ -2025,58 +1459,32 @@ function onLocationError(err) {
 function locateMe(userTriggered) {
   if (!navigator.geolocation) return;
   locateBtn.classList.add('active');
-  // Auto-open: accept a cached fix up to 60s old so the app doesn't stall
-  // waiting for a fresh GPS lock on first load. Manual button tap: always
-  // force a fresh, high-accuracy read since the user explicitly asked.
   const options = userTriggered
     ? { enableHighAccuracy: true, maximumAge: 0, timeout: 15000 }
     : { enableHighAccuracy: false, maximumAge: 60000, timeout: 5000 };
   navigator.geolocation.getCurrentPosition(
-    (pos) => onLocationFound(pos, true),
+    (pos) => onLocationFound(pos, userTriggered || !userSearched),
     (err) => { err.__userTriggered = userTriggered; onLocationError(err); },
     options
   );
 }
 
 locateBtn.addEventListener('click', () => {
-  if (!navigator.geolocation) {
-    alert('Geolocation is not supported on this device.');
-    return;
-  }
-  // The dot is already kept up to date by watchPosition (plus the 5s
-  // watchdog below), so its current position IS the latest known location.
-  // Jump there immediately instead of waiting several seconds for the phone
-  // to produce a brand-new GPS fix.
-  if (userMarker) {
-    map.setView(userMarker.getLatLng(), 17, { animate: true });
-    return;
-  }
-  // No location known yet (first fix still pending, or permission not
-  // granted yet): fall back to a real request so the user gets the prompt/error.
+  if (!navigator.geolocation) { alert('Geolocation is not supported on this device.'); return; }
+  if (userMarker) { const ll = userMarker.getLngLat(); moveTo(ll.lng, ll.lat, 16, 0); return; }
   locateMe(true);
 });
 
-// Auto-locate on page open
 locateMe(false);
 
-// ---- Keep the red dot live: continuous tracking ----
-// watchPosition fires automatically whenever the device reports a new fix
-// (roughly every 1-2s while moving with GPS active). maximumAge:1000 lets it
-// reuse a fix if one arrived less than a second ago, without ever forcing an
-// extra GPS read the way a manual setInterval poll would. The marker moves
-// on every update; the map itself is NOT re-centered here so it doesn't jump
-// around while you're browsing it.
 if (navigator.geolocation) {
-  watchId = navigator.geolocation.watchPosition(
+  navigator.geolocation.watchPosition(
     (pos) => onLocationFound(pos, false),
     (err) => console.error('watchPosition error:', err),
     { enableHighAccuracy: true, maximumAge: 1000, timeout: 10000 }
   );
 }
 
-// Watchdog: if watchPosition goes quiet (no new fix) for more than 5s -
-// e.g. the device throttles it in the background, or GPS briefly stalls -
-// force a fresh one-off read so the dot never sits stale for long.
 let forcingFix = false;
 setInterval(() => {
   if (!navigator.geolocation || forcingFix) return;
@@ -2090,38 +1498,12 @@ setInterval(() => {
   }
 }, 1000);
 
-// ---- Google-Maps-style touch zoom gestures ----
-// 1) Quick double-tap (release quickly): zoom in by one level. Handled
-//    manually because iOS Safari can be unreliable with the native
-//    dblclick-based zoom on touch.
-// 2) Double-tap, then HOLD and drag up/down without lifting the finger:
-//    handled by the leaflet-doubletapdragzoom plugin (loaded above),
-//    which uses the exact same smooth engine as Leaflet's built-in
-//    two-finger pinch-zoom — so it feels identical to pinch.
-(function enableReliableQuickDoubleTapZoom() {
-  let lastTapTime = 0;
-  const container = map.getContainer();
-
-  container.addEventListener('touchend', function (e) {
-    if (e.touches.length > 0) return; // ignore mid multi-touch gestures
-    const now = Date.now();
-    const timeSinceLastTap = now - lastTapTime;
-
-    if (timeSinceLastTap > 0 && timeSinceLastTap < 250) {
-      const touch = e.changedTouches[0];
-      const rect = container.getBoundingClientRect();
-      const point = L.point(touch.clientX - rect.left, touch.clientY - rect.top);
-      const latlng = map.containerPointToLatLng(point);
-      map.setZoomAround(latlng, map.getZoom() + 1, { animate: true });
-      e.preventDefault();
-      lastTapTime = 0; // reset so a third tap doesn't chain another zoom
-    } else {
-      lastTapTime = now;
-    }
-  }, { passive: false });
-})();
-
-
+// Zoom gestures (all built into MapLibre, all GPU-smooth):
+//  - pinch with two fingers
+//  - double-tap: zoom in one level
+//  - double-tap, HOLD, then drag: drag down = zoom in, drag up = zoom out
+// Exposed for testing / debugging from the console.
+window.__fatmap = { map, get points() { return allPoints; } };
 </script>
 </body>
 </html>
