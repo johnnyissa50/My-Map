@@ -123,6 +123,34 @@
   .measure-pt.dragging .mp-dot { transform:scale(1.5); }
   #map.measuring .maplibregl-canvas-container.maplibregl-interactive { cursor:crosshair; }
 
+  /* ---- Loading progress panel (real progress of each loading stage) ---- */
+  #loadPanel {
+    /* left of the +/- and tool buttons (right column ≈ 50px), centered in what's left */
+    position:absolute; top:calc(64px + env(safe-area-inset-top, 0px) + 12px); left:12px; right:58px;
+    max-width:330px; margin:0 auto; z-index:950; box-sizing:border-box;
+    background:rgba(255,255,255,.96); color:#222; border-radius:10px; padding:9px 12px 10px;
+    box-shadow:0 3px 14px rgba(0,0,0,.35); font-size:13px; pointer-events:none;
+    transition:opacity .35s;
+  }
+  #loadPanel.hide { opacity:0; }
+  #loadRow { display:flex; justify-content:space-between; gap:8px; margin-bottom:6px; }
+  #loadText { white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  #loadPct { font-weight:700; font-variant-numeric:tabular-nums; }
+  #loadTrack { height:6px; background:#e3e3e3; border-radius:3px; overflow:hidden; }
+  #loadFill { height:100%; width:0; background:#1a73e8; border-radius:3px; transition:width .15s linear; }
+  /* last stage (inside MapLibre's own worker) can't report finer steps: show it as "working" */
+  #loadPanel.busy #loadFill {
+    background-image:linear-gradient(45deg,rgba(255,255,255,.35) 25%,transparent 25%,transparent 50%,rgba(255,255,255,.35) 50%,rgba(255,255,255,.35) 75%,transparent 75%,transparent);
+    background-size:16px 16px; animation:loadStripes .6s linear infinite;
+  }
+  @keyframes loadStripes { from { background-position:0 0; } to { background-position:16px 0; } }
+  #loadPanel.error { pointer-events:auto; }
+  #loadPanel.error #loadText { color:#c00; white-space:normal; }
+  #loadPanel.error #loadFill { background:#c00; }
+  #loadRetry { display:none; margin-top:8px; width:100%; padding:7px; border:none; border-radius:6px; background:#1a73e8; color:#fff; font-weight:700; font-size:13px; }
+  #loadPanel.error #loadRetry { display:block; }
+  html.filter-on #loadFill { background:#d50000; }
+
   #toast {
     position:fixed; left:50%; bottom:calc(56px + env(safe-area-inset-bottom, 0px));
     transform:translateX(-50%); z-index:2000; display:none; max-width:80%;
@@ -189,9 +217,131 @@
   <img src="https://visitor-badge.laobi.icu/badge?page_id=masiraq.fat-map.github.io&left_color=gray&right_color=blue" alt="visits" />
 </div>
 
+<div id="loadPanel" role="status" aria-live="polite">
+  <div id="loadRow"><span id="loadText">Starting…</span><span id="loadPct">0%</span></div>
+  <div id="loadTrack"><div id="loadFill"></div></div>
+  <button id="loadRetry" type="button" onclick="location.reload()">Retry</button>
+</div>
+
+<script>
+// =============================================================================
+// LOADING PROGRESS + EARLY DATA DOWNLOAD
+// This plain script runs immediately, before the map engine (≈465 KB) has
+// downloaded, so data.csv and the engine download IN PARALLEL instead of one
+// after the other. The bar shows real progress for every stage:
+//   0-70%  downloading data.csv  (bytes actually received)
+//  70-85%  reading the rows      (bytes of CSV parsed so far)
+//  85-90%  handing points to the map
+//  90-100% the map indexing + drawing them (MapLibre's own worker: shown as
+//          "working" because it can't report finer steps)
+// =============================================================================
+(function () {
+  var panel = document.getElementById('loadPanel');
+  var textEl = document.getElementById('loadText');
+  var pctEl = document.getElementById('loadPct');
+  var fill = document.getElementById('loadFill');
+  var shown = 0, finished = false;
+
+  function set(pct, text, busy) {
+    if (finished) return;
+    pct = Math.max(shown, Math.min(100, pct)); // never moves backwards
+    shown = pct;
+    fill.style.width = pct.toFixed(1) + '%';
+    pctEl.textContent = Math.floor(pct) + '%';
+    if (text != null) textEl.textContent = text;
+    panel.classList.toggle('busy', !!busy);
+  }
+  function done() {
+    if (finished) return;
+    set(100, 'Ready', false);
+    finished = true;
+    panel.classList.add('hide');
+    setTimeout(function () { panel.style.display = 'none'; }, 400);
+  }
+  function error(msg) {
+    if (finished) return;
+    finished = true;
+    panel.classList.remove('busy');
+    panel.classList.add('error');
+    textEl.textContent = msg;
+    pctEl.textContent = '';
+  }
+  window.LoadUI = { set: set, done: done, error: error };
+
+  function mb(b) { return (b / 1048576).toFixed(1); }
+
+  // No WebGL2 = MapLibre can't draw anything: say so instead of a blank map.
+  try {
+    if (!document.createElement('canvas').getContext('webgl2')) {
+      error('This browser cannot show the map (WebGL2 not available). Please update the browser or try Chrome / Safari.');
+      return;
+    }
+  } catch (e) {}
+
+  var SIZE_KEY = 'csvBytes';
+  window.__csvText = (async function () {
+    set(0, 'Downloading data…');
+    var r = await fetch('data.csv');
+    if (!r.ok) throw new Error('HTTP ' + r.status);
+    var len = Number(r.headers.get('Content-Length')) || 0;
+    var enc = (r.headers.get('Content-Encoding') || '').toLowerCase();
+    // Bytes are counted AFTER decompression. If the server compresses (GitHub
+    // Pages does), Content-Length is the compressed size, so the real total is
+    // taken from the previous visit (exact unless the file changed), or on a
+    // first visit estimated from the typical CSV compression ratio (~3.7x).
+    var total = 0, estimated = false, approx = false;
+    if (len && (!enc || enc === 'identity')) total = len;
+    else {
+      try { total = Number(localStorage.getItem(SIZE_KEY)) || 0; } catch (e) {}
+      if (!total && len) { total = len * 3.7; approx = true; } // first visit: show "~"
+      estimated = true;
+    }
+    var bytes;
+    if (r.body && r.body.getReader) {
+      var reader = r.body.getReader(), parts = [], got = 0, lastUi = 0;
+      for (;;) {
+        var step = await reader.read();
+        if (step.done) break;
+        parts.push(step.value);
+        got += step.value.length;
+        var now = Date.now();
+        if (now - lastUi > 80) {
+          lastUi = now;
+          if (total) {
+            if (estimated && got > total * 0.97) total = got / 0.97; // estimate was low: stretch it
+            var frac = Math.min(got / total, estimated ? 0.97 : 1);
+            set(70 * frac, 'Downloading data… ' + mb(got) + ' / ' + (approx ? '~' : '') + mb(total) + ' MB');
+          } else {
+            set(Math.min(60, shown + 0.5), 'Downloading data… ' + mb(got) + ' MB');
+          }
+        }
+      }
+      bytes = new Uint8Array(got);
+      var off = 0;
+      for (var i = 0; i < parts.length; i++) { bytes.set(parts[i], off); off += parts[i].length; }
+      try { localStorage.setItem(SIZE_KEY, String(got)); } catch (e) {}
+    } else {
+      set(10, 'Downloading data…');
+      bytes = new Uint8Array(await r.arrayBuffer());
+    }
+    set(70, window.__engineStarted ? 'Reading points…' : 'Loading map engine…');
+    return new TextDecoder('utf-8').decode(bytes);
+  })();
+  window.__csvText.catch(function (err) {
+    console.error(err);
+    error('Could not download the FAT data. Check the internet connection and try again.');
+  });
+
+  // If the map engine (from the CDN) never starts, don't leave the bar hanging.
+  setTimeout(function () {
+    if (!window.__engineStarted) error('Could not load the map engine. Check the internet connection and try again.');
+  }, 60000);
+})();
+</script>
 <script src="https://unpkg.com/papaparse@5.4.1/papaparse.min.js"></script>
 <script type="module">
 import * as maplibregl from 'https://unpkg.com/maplibre-gl@6.19.0/dist/maplibre-gl.mjs';
+window.__engineStarted = true;
 
 // =============================================================================
 // WHY THIS IS FAST
@@ -531,35 +681,85 @@ async function zoomIntoCluster(f) {
 // ---- Load the data (one time) ---------------------------------------------
 const mapLoaded = new Promise(res => map.once('load', res));
 
-fetch('data.csv')
-  .then(r => { if (!r.ok) throw new Error('HTTP ' + r.status); return r.text(); })
-  .then(csvText => {
-    const parsed = Papa.parse(csvText, { header: true, dynamicTyping: false, skipEmptyLines: true });
+// Wait until the browser has actually painted (so the progress bar shows the
+// new text before a long blocking step starts).
+const nextPaint = () => new Promise(r => requestAnimationFrame(() => setTimeout(r, 0)));
+
+// Parse the CSV in ~512 KB slices, pausing between slices so the progress
+// bar (and the map itself) keep updating instead of freezing for the whole parse.
+function parseCsvWithProgress(csvText) {
+  return new Promise((resolve, reject) => {
     const data = [];
-    parsed.data.forEach(row => {
-      const name = (row.NAME || '').trim();
-      const lat = parseFloat(row.latitude);
-      const lng = parseFloat(row.longitude);
-      if (!name || isNaN(lat) || isNaN(lng)) return;
-      const partner = (row.Partner || '').trim();
-      const ont = (row['Installed ONTs'] || '').trim();
-      const area = (row.Area || '').trim().replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-      data.push({
-        n: name, search: name.toUpperCase(), lat: lat, lng: lng,
-        c: PARTNER_COLORS.get(partner) || DEFAULT_POINT_COLOR,
-        pt: partner || 'Unknown', area: area || 'Unknown', ont: ont || 'Unknown',
-        zero: ont !== '' && Number(ont) === 0,
-        uc: usageColor(ont)
-      });
+    const len = csvText.length || 1;
+    Papa.parse(csvText, {
+      header: true, dynamicTyping: false, skipEmptyLines: true,
+      chunkSize: 512 * 1024,
+      chunk: (res, parser) => {
+        const rows = res.data;
+        for (let i = 0; i < rows.length; i++) {
+          const row = rows[i];
+          const name = (row.NAME || '').trim();
+          const lat = parseFloat(row.latitude);
+          const lng = parseFloat(row.longitude);
+          if (!name || isNaN(lat) || isNaN(lng)) continue;
+          const partner = (row.Partner || '').trim();
+          const ont = (row['Installed ONTs'] || '').trim();
+          const area = (row.Area || '').trim().replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+          data.push({
+            n: name, search: name.toUpperCase(), lat: lat, lng: lng,
+            c: PARTNER_COLORS.get(partner) || DEFAULT_POINT_COLOR,
+            pt: partner || 'Unknown', area: area || 'Unknown', ont: ont || 'Unknown',
+            zero: ont !== '' && Number(ont) === 0,
+            uc: usageColor(ont)
+          });
+        }
+        const frac = Math.min(1, res.meta.cursor / len);
+        LoadUI.set(70 + 15 * frac, 'Reading points… ' + data.length.toLocaleString('en-US'));
+        parser.pause();
+        nextPaint().then(() => parser.resume());
+      },
+      complete: () => resolve(data),
+      error: reject
     });
-    allPoints = data;
-    for (const p of data) pointByName[p.n] = p;
-    return mapLoaded.then(() => {
-      addPointLayers(data);
-      pointsReady = true;
-    });
-  })
-  .catch(err => console.error(err));
+  });
+}
+
+// Resolves once both point sources are fully indexed by MapLibre and drawn.
+function pointsDrawn() {
+  return new Promise(resolve => {
+    const ok = () => { try { return map.isSourceLoaded('fat-all') && map.isSourceLoaded('fat-zero'); } catch (e) { return false; } };
+    const finish = () => {
+      map.off('sourcedata', check);
+      let settled = false;
+      const end = () => { if (!settled) { settled = true; resolve(); } };
+      map.once('idle', end);
+      setTimeout(end, 3000);
+    };
+    const check = () => { if (ok()) finish(); };
+    map.on('sourcedata', check);
+    check();
+  });
+}
+
+(async () => {
+  const csvText = await window.__csvText;
+  LoadUI.set(70, 'Reading points…');
+  await nextPaint();
+  const data = await parseCsvWithProgress(csvText);
+  allPoints = data;
+  for (const p of data) pointByName[p.n] = p;
+  LoadUI.set(85, 'Preparing map… ' + data.length.toLocaleString('en-US') + ' points');
+  await mapLoaded;
+  await nextPaint();          // let the label paint before the one blocking hand-off
+  addPointLayers(data);
+  pointsReady = true;
+  LoadUI.set(90, 'Drawing points on the map…', true);
+  await pointsDrawn();
+  LoadUI.done();
+})().catch(err => {
+  console.error(err);
+  LoadUI.error('Could not load the FAT data. Please try again.');
+});
 
 // ---- Filter 0 User / Usage --------------------------------------------------
 const filterBtn = document.getElementById('filterBtn');
