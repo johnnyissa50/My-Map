@@ -306,12 +306,20 @@ function dist2(a, b) { const dx = a.x - b.x, dy = a.y - b.y; return Math.sqrt(dx
 // Move the camera so that [lng,lat] ends up offsetY px from the screen centre.
 // Short hops animate; long jumps (target off-screen or >4 zoom levels away)
 // are instant - same behaviour Leaflet's setView had.
+// Time until which a camera animation started by this file is running.
+// The compass waits for it instead of interrupting it (setBearing would
+// cut a search/locate animation short).
+let cameraBusyUntil = 0;
+function markCameraBusy(ms) { cameraBusyUntil = Math.max(cameraBusyUntil, performance.now() + ms + 50); }
+
 function moveTo(lng, lat, zoom, offsetY) {
   const p = map.project([lng, lat]);
   const c = map.getContainer();
   const onScreen = p.x >= 0 && p.y >= 0 && p.x <= c.clientWidth && p.y <= c.clientHeight;
   const near = onScreen && Math.abs(zoom - map.getZoom()) <= 4;
-  map.easeTo({ center: [lng, lat], zoom: zoom, offset: [0, offsetY || 0], duration: near ? 450 : 0 });
+  const duration = near ? 450 : 0;
+  markCameraBusy(duration);
+  map.easeTo({ center: [lng, lat], zoom: zoom, offset: [0, offsetY || 0], duration: duration });
 }
 
 // ---- Popups (one open at a time, like Leaflet) -----------------------------
@@ -515,6 +523,7 @@ function nearestFat(pt, r) {
 async function zoomIntoCluster(f) {
   try {
     const z = await map.getSource('fat-' + activeSet()).getClusterExpansionZoom(f.properties.cluster_id);
+    markCameraBusy(400);
     map.easeTo({ center: f.geometry.coordinates, zoom: Math.min(z, MAP_MAX_ZOOM), duration: 400 });
   } catch (e) { console.error(e); }
 }
@@ -784,8 +793,10 @@ function compassFrame() {
   if (!compassOn) return;
   compassRaf = requestAnimationFrame(compassFrame);
   if (compassTarget === null) return;
-  if (map.isEasing()) return; // don't interrupt a search/locate camera move
-  if (compassShown === null) compassShown = compassTarget;
+  if (performance.now() < cameraBusyUntil) return; // don't interrupt a search/locate camera move
+  // Start from the map's current bearing (not the sensor's), so the very
+  // first reading also turns the map - smoothly, instead of jumping.
+  if (compassShown === null) compassShown = ((map.getBearing() % 360) + 360) % 360;
   const d = angDiff(compassShown, compassTarget);
   if (Math.abs(d) < 0.3) return;
   compassShown = (compassShown + d * 0.15 + 360) % 360;
