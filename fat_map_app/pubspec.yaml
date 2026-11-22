@@ -1,0 +1,27 @@
+name: fat_map
+description: FAT Map - native map of FAT points (Android / iOS).
+publish_to: 'none'
+version: 0.1.0+1
+
+environment:
+  sdk: ">=3.4.0 <4.0.0"
+
+dependencies:
+  flutter:
+    sdk: flutter
+  # Native MapLibre engine (C++), the same engine family as the web version.
+  maplibre_gl: ">=0.21.0 <1.0.0"
+  geolocator: ">=13.0.0 <16.0.0"
+  url_launcher: ^6.3.0
+  path_provider: ^2.1.0
+  csv: ^6.0.0
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ">=4.0.0 <7.0.0"
+
+flutter:
+  uses-material-design: true
+  assets:
+    - assets/data.csv
