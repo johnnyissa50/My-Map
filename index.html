@@ -939,9 +939,9 @@ let userMarker = null;
 // Priority mirrors the old Leaflet stacking: your dot, then the searched
 // coordinate, then FAT points / clusters, then empty map.
 map.on('click', (e) => {
-  const t = e.originalEvent && e.originalEvent.target;
-  if (t && t.closest && t.closest('.measure-pt')) return; // tap on a measure dot
-
+  // While measuring, a TAP anywhere - even right on or next to an existing
+  // measure dot - adds a new point. Only a DRAG moves an existing dot
+  // (a drag never produces a click, so the two never conflict).
   if (measuring) {
     const cl = nearestFeature(e.point, 14, true);
     if (cl && cl.properties.cluster) { zoomIntoCluster(cl); return; }
