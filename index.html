@@ -598,6 +598,35 @@ function toFeatureCollection(points) {
 
 function pointColorExpr() { return ['get', usageOn ? 'uc' : 'c']; }
 
+// ---- Cluster color = color of the MAJORITY of its points --------------------
+// Each cluster counts how many of its points have each color (done once, in
+// MapLibre's worker, while the points are indexed - never during gestures).
+// The paint expression then picks the color with the highest count
+// (on a tie, the first color in the list wins).
+const uniq = a => [...new Set(a)];
+const CLUSTER_C_COLORS = uniq([...PARTNER_COLORS.values(), DEFAULT_POINT_COLOR]);
+const CLUSTER_U_COLORS = uniq(['#00FF00', ...USAGE_COLORS]);
+const CLUSTER_PROPS = {};
+CLUSTER_C_COLORS.forEach((col, i) => { CLUSTER_PROPS['c' + i] = ['+', ['case', ['==', ['get', 'c'], col], 1, 0]]; });
+CLUSTER_U_COLORS.forEach((col, i) => { CLUSTER_PROPS['u' + i] = ['+', ['case', ['==', ['get', 'uc'], col], 1, 0]]; });
+
+function majorityExpr(colors, prefix) {
+  if (colors.length === 1) return colors[0];
+  const expr = ['case'];
+  for (let i = 0; i < colors.length - 1; i++) {
+    const cond = ['all'];
+    for (let j = 0; j < colors.length; j++) {
+      if (j !== i) cond.push(['>=', ['get', prefix + i], ['get', prefix + j]]);
+    }
+    expr.push(cond, colors[i]);
+  }
+  expr.push(colors[colors.length - 1]);
+  return expr;
+}
+const CLUSTER_C_EXPR = majorityExpr(CLUSTER_C_COLORS, 'c');
+const CLUSTER_U_EXPR = majorityExpr(CLUSTER_U_COLORS, 'u');
+function clusterColorExpr() { return usageOn ? CLUSTER_U_EXPR : CLUSTER_C_EXPR; }
+
 function addPointLayers(data) {
   SETS.forEach(s => {
     map.addSource('fat-' + s, {
@@ -607,7 +636,8 @@ function addPointLayers(data) {
           : toFeatureCollection(data),
       cluster: true,
       clusterMaxZoom: DENSE_ZOOM - 1,
-      clusterRadius: 60,
+      clusterRadius: 20,
+      clusterProperties: CLUSTER_PROPS,
       maxzoom: 16,     // tiles past z16 are overzoomed (still ~cm precision)
       buffer: 32
     });
@@ -617,7 +647,7 @@ function addPointLayers(data) {
       filter: ['has', 'point_count'],
       layout: { visibility: vis },
       paint: {
-        'circle-radius': 12, 'circle-color': '#808080',
+        'circle-radius': 9, 'circle-color': clusterColorExpr(),
         'circle-stroke-width': 3, 'circle-stroke-color': '#ffffff'
       }
     });
@@ -789,7 +819,10 @@ usageBtn.addEventListener('click', () => {
   usageOn = !usageOn;
   applyRedTheme();
   usageBtn.classList.toggle('active', usageOn);
-  if (pointsReady) SETS.forEach(s => map.setPaintProperty(L_PT(s), 'circle-color', pointColorExpr()));
+  if (pointsReady) SETS.forEach(s => {
+    map.setPaintProperty(L_PT(s), 'circle-color', pointColorExpr());
+    map.setPaintProperty(L_CL(s), 'circle-color', clusterColorExpr());
+  });
 });
 
 // ---- Measure-distance tool --------------------------------------------------
