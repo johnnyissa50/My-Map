@@ -385,7 +385,7 @@ const FALLBACK_ORDER = ['google', 'esri', 'street'];
 // zoom N+1 (512px vs 256px world tiles). Every value below is the old Leaflet
 // value minus 1, so everything appears at exactly the same scale as before.
 const MAP_MAX_ZOOM = 19; // = Leaflet 20
-const DENSE_ZOOM = 9;    // = Leaflet 10: clustering stops from this zoom
+const DENSE_ZOOM = 11;   // = Leaflet 12: clustering stops from this zoom
 const LABEL_ZOOM = 17;   // = Leaflet 18: name labels appear from this zoom
 const TILE_Z = () => map.getZoom() + 1; // zoom of the 256px basemap tiles being shown
 
@@ -636,7 +636,7 @@ function addPointLayers(data) {
           : toFeatureCollection(data),
       cluster: true,
       clusterMaxZoom: DENSE_ZOOM - 1,
-      clusterRadius: 10,
+      clusterRadius: 3,
       clusterProperties: CLUSTER_PROPS,
       maxzoom: 16,     // tiles past z16 are overzoomed (still ~cm precision)
       buffer: 32
@@ -647,8 +647,8 @@ function addPointLayers(data) {
       filter: ['has', 'point_count'],
       layout: { visibility: vis },
       paint: {
-        'circle-radius': 9, 'circle-color': clusterColorExpr(),
-        'circle-stroke-width': 3, 'circle-stroke-color': '#ffffff'
+        'circle-radius': 7, 'circle-color': clusterColorExpr(),
+        'circle-stroke-width': 2, 'circle-stroke-color': '#ffffff'
       }
     });
     map.addLayer({
