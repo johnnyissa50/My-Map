@@ -636,7 +636,7 @@ function addPointLayers(data) {
           : toFeatureCollection(data),
       cluster: true,
       clusterMaxZoom: DENSE_ZOOM - 1,
-      clusterRadius: 20,
+      clusterRadius: 10,
       clusterProperties: CLUSTER_PROPS,
       maxzoom: 16,     // tiles past z16 are overzoomed (still ~cm precision)
       buffer: 32
